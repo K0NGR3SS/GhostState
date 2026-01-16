@@ -29,17 +29,9 @@ var (
 )
 
 var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorGold).
-			MarginBottom(1)
-
-	headerStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Bold(true).
-			Underline(true).
-			MarginBottom(1)
-
+	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
+	headerStyle = lipgloss.NewStyle().Foreground(colorWhite).Bold(true).Underline(true).MarginBottom(1)
+	
 	checkboxStyle = lipgloss.NewStyle().Foreground(colorGray).PaddingLeft(1)
 	selectedStyle = lipgloss.NewStyle().Foreground(colorGold).Bold(true).PaddingLeft(1)
 
@@ -85,7 +77,16 @@ func InitialModel() Model {
 
 	return Model{
 		state:    StateMenu,
-		choices:  []string{"Scan EC2 Instances", "Scan S3 Buckets"},
+		choices:  []string{
+			"Scan EC2 Instances", 
+			"Scan S3 Buckets", 
+			"Scan RDS Databases", 
+			"Scan ElastiCache", 
+			"Scan ACM Certs", 
+			"Scan Security Groups",
+			"Scan ECS Clusters",
+			"Scan CloudFront Distributions",
+		},
 		selected: map[int]bool{0: true, 1: true},
 		cursor:   0,
 		inputs:   []textinput.Model{tKey, tVal},
@@ -100,10 +101,16 @@ func (m Model) Init() tea.Cmd {
 }
 
 type StartScanMsg struct {
-	ScanEC2   bool
-	ScanS3    bool
-	TargetKey string
-	TargetVal string
+	ScanEC2        bool
+	ScanS3         bool
+	ScanRDS        bool
+	ScanElasti     bool
+	ScanACM        bool
+	ScanSecGroups  bool
+	ScanECS        bool
+	ScanCloudfront bool
+	TargetKey      string
+	TargetVal      string
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -139,16 +146,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						
 						key := m.inputs[0].Value()
 						val := m.inputs[1].Value()
-
 						if key == "" { key = "ManagedBy" }
 						if val == "" { val = "Terraform" }
 
 						return m, func() tea.Msg {
 							return StartScanMsg{
-								ScanEC2:   m.selected[0],
-								ScanS3:    m.selected[1],
-								TargetKey: key,
-								TargetVal: val,
+								ScanEC2:       m.selected[0],
+								ScanS3:        m.selected[1],
+								ScanRDS:       m.selected[2],
+								ScanElasti:    m.selected[3],
+								ScanACM:       m.selected[4],
+								ScanSecGroups: m.selected[5],
+								ScanECS:       m.selected[6],
+								ScanCloudfront:m.selected[7],
+								TargetKey:     key,
+								TargetVal:     val,
 							}
 						}
 					}
@@ -186,11 +198,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StartScanMsg:
 		if Program != nil {
 			cfg := aws.AuditConfig{
-				ScanEC2:   msg.ScanEC2,
-				ScanS3:    msg.ScanS3,
-				Mode:      "MISSING_SPECIFIC_TAG",
-				TargetKey: msg.TargetKey,
-				TargetVal: msg.TargetVal,
+				ScanEC2:       msg.ScanEC2,
+				ScanS3:        msg.ScanS3,
+				ScanRDS:       msg.ScanRDS,
+				ScanElasti:    msg.ScanElasti,
+				ScanACM:       msg.ScanACM,
+				ScanSecGroups: msg.ScanSecGroups,
+				ScanECS:       msg.ScanECS,
+				ScanCloudfront:msg.ScanCloudfront,
+				Mode:          "MISSING_SPECIFIC_TAG",
+				TargetKey:     msg.TargetKey,
+				TargetVal:     msg.TargetVal,
 			}
 			go aws.ScanAll(Program, cfg)
 		}
@@ -226,17 +244,16 @@ func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-
 func (m Model) View() string {
-		title := `
-	  ________.__                    __   _________ __          __          
-	 /  _____/|  |__   ____  _______/  |_/   _____//  |______ _/  |_  ____  
-	/   \  ___|  |  \ /  _ \/  ___/\   __\_____  \\   __\__  \\   __\/ __ \ 
-	\    \_\  \   Y  (  <_> )___ \  |  | /        \|  |  / __ \|  | \  ___/ 
-	 \______  /___|  /\____/____  > |__|/_______  /|__| (____  /__|  \___  >
-			\/     \/           \/              \/           \/          \/ 
-	`
-		s := titleStyle.Render(title) + "\n\n"
+	title := `
+  ________.__                    __   _________ __          __          
+ /  _____/|  |__   ____  _______/  |_/   _____//  |______ _/  |_  ____  
+/   \  ___|  |  \ /  _ \/  ___/\   __\_____  \\   __\__  \\   __\/ __ \ 
+\    \_\  \   Y  (  <_> )___ \  |  | /        \|  |  / __ \|  | \  ___/ 
+ \______  /___|  /\____/____  > |__|/_______  /|__| (____  /__|  \___  >
+        \/     \/           \/              \/           \/          \/ 
+`
+	s := titleStyle.Render(title) + "\n\n"
 
 	if m.state == StateMenu {
 		s += headerStyle.Render("1. SELECT TARGETS") + "\n\n"
