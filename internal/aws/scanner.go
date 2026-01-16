@@ -110,6 +110,7 @@ func scanS3(cfg aws.Config, p *tea.Program) {
 
 	for _, b := range resp.Buckets {
 		// Check if Bucket is Public
+		// THIS IS SIMPLIFIED GONNA BE UPGRADED
 		tags, err := client.GetBucketTagging(context.TODO(), &s3.GetBucketTaggingInput{Bucket: b.Name})
 		isManaged := false
 
