@@ -1,0 +1,5 @@
+#.gitignore
+.env
+.DS_Store
+bin/
+ghoststate
