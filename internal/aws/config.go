@@ -15,10 +15,13 @@ const (
 type AuditConfig struct {
 	ScanEC2       bool
 	ScanS3        bool
+	ScanLambda	  bool
 	ScanRDS       bool
 	ScanElasti    bool
+	ScanDynamoDB  bool
 	ScanACM       bool
 	ScanSecGroups bool
+	ScanVPC      bool
 	ScanECS        bool
 	ScanCloudfront bool
 
