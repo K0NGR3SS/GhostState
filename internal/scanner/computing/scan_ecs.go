@@ -1,51 +1,53 @@
-package aws
+package computing
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanECS(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := ecs.NewFromConfig(cfg)
+type ECSScanner struct {
+	client *ecs.Client
+}
 
-	listOut, err := client.ListClusters(context.TODO(), &ecs.ListClustersInput{})
+func NewECSScanner(cfg aws.Config) *ECSScanner {
+	return &ECSScanner{client: ecs.NewFromConfig(cfg)}
+}
+
+func (s *ECSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+
+	listOut, err := s.client.ListClusters(ctx, &ecs.ListClustersInput{})
 	if err != nil {
-		send(p, "ECS: error listing clusters: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing clusters: %w", err)
 	}
+	if len(listOut.ClusterArns) == 0 { return nil, nil }
 
-	if len(listOut.ClusterArns) == 0 {
-		return
-	}
-
-	descOut, err := client.DescribeClusters(context.TODO(), &ecs.DescribeClustersInput{
+	descOut, err := s.client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
 		Clusters: listOut.ClusterArns,
 		Include:  []types.ClusterField{types.ClusterFieldTags},
 	})
 	if err != nil {
-		return
+		return nil, fmt.Errorf("describing clusters: %w", err)
 	}
 
 	for _, cl := range descOut.Clusters {
-		name := aws.ToString(cl.ClusterName)
-		status := aws.ToString(cl.Status)
-
-		hasTag := false
+		tagMap := make(map[string]string)
 		for _, t := range cl.Tags {
-			if t.Key != nil && t.Value != nil &&
-				*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-				hasTag = true
-				break
-			}
+			if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
 		}
 
-		if !hasTag {
-			send(p, fmt.Sprintf("ECS: cluster=%s status=%s", name, status))
+		if !scanner.IsCompliant(tagMap, rule) {
+			resources = append(resources, scanner.Resource{
+				Type: "ECS Cluster",
+				ID:   aws.ToString(cl.ClusterName),
+				ARN:  aws.ToString(cl.ClusterArn),
+			})
 		}
 	}
+
+	return resources, nil
 }

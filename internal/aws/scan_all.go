@@ -5,11 +5,6 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
-	"github.com/K0NGR3SS/GhostState/internal/scanner/computing"
-	"github.com/K0NGR3SS/GhostState/internal/scanner/data"
-	"github.com/K0NGR3SS/GhostState/internal/scanner/networking"
-	"github.com/K0NGR3SS/GhostState/internal/scanner/security"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

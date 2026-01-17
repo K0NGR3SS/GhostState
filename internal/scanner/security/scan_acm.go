@@ -1,68 +1,62 @@
-package aws
+package security
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acm"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanACM(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := acm.NewFromConfig(cfg)
+type ACMScanner struct {
+	client *acm.Client
+}
 
-	listOut, err := client.ListCertificates(context.TODO(), &acm.ListCertificatesInput{})
+func NewACMScanner(cfg aws.Config) *ACMScanner {
+	return &ACMScanner{client: acm.NewFromConfig(cfg)}
+}
+
+func (s *ACMScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+
+	listOut, err := s.client.ListCertificates(ctx, &acm.ListCertificatesInput{})
 	if err != nil {
-		send(p, "ACM: error listing certificates: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing certificates: %w", err)
 	}
 
-	for _, certSummary := range listOut.CertificateSummaryList {
-		if certSummary.CertificateArn == nil {
-			continue
-		}
-		arn := *certSummary.CertificateArn
+	for _, summary := range listOut.CertificateSummaryList {
+		if summary.CertificateArn == nil { continue }
+		arn := *summary.CertificateArn
 
-		descOut, err := client.DescribeCertificate(context.TODO(), &acm.DescribeCertificateInput{
+		tagOut, err := s.client.ListTagsForCertificate(ctx, &acm.ListTagsForCertificateInput{
 			CertificateArn: &arn,
 		})
-		if err != nil || descOut.Certificate == nil {
-			continue
-		}
+		if err != nil { continue }
 
-		cert := descOut.Certificate
-		domain := aws.ToString(cert.DomainName)
-		issuer := aws.ToString(cert.Issuer)
-		status := cert.Status
-		notAfter := cert.NotAfter
-		inUseBy := cert.InUseBy
-
-		hasTag := false
-		tagOut, err := client.ListTagsForCertificate(context.TODO(), &acm.ListTagsForCertificateInput{
-			CertificateArn: &arn,
-		})
-		if err == nil {
-			for _, t := range tagOut.Tags {
-				if t.Key != nil && t.Value != nil &&
-					*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-					hasTag = true
-					break
-				}
+		isCompliant := false
+		for _, t := range tagOut.Tags {
+			if t.Key != nil && t.Value != nil &&
+				*t.Key == rule.TargetKey && *t.Value == rule.TargetVal {
+				isCompliant = true
+				break
 			}
 		}
 
-		if !hasTag {
-			expStr := "unknown"
-			if notAfter != nil {
-				expStr = notAfter.UTC().Format("2006-01-02")
-			}
-			inUseFlag := len(inUseBy) > 0
+		if !isCompliant {
 
-			send(p, fmt.Sprintf(
-				"ACM: arn=%s domain=%s status=%s expires=%s inUse=%t issuer=%s",
-				arn, domain, status, expStr, inUseFlag, issuer,
-			))
+			descOut, err := s.client.DescribeCertificate(ctx, &acm.DescribeCertificateInput{CertificateArn: &arn})
+			id := arn
+			if err == nil && descOut.Certificate != nil {
+				id = fmt.Sprintf("%s (%s)", aws.ToString(descOut.Certificate.DomainName), arn)
+			}
+			
+			resources = append(resources, scanner.Resource{
+				Type: "ACM Certificate",
+				ID:   id,
+				ARN:  arn,
+			})
 		}
 	}
+
+	return resources, nil
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"ghoststate/internal/scanner"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type DynamoDBScanner struct {
@@ -39,11 +39,16 @@ func (s *DynamoDBScanner) Scan(ctx context.Context, auditRule scanner.AuditRule)
 			tags, err := s.client.ListTagsOfResource(ctx, &dynamodb.ListTagsOfResourceInput{
 				ResourceArn: aws.String(tableArn),
 			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to list tags for %s: %w", tableName, err)
+			if err != nil { continue }
+
+			tagMap := make(map[string]string)
+			for _, t := range tags.Tags {
+				if t.Key != nil && t.Value != nil {
+					tagMap[*t.Key] = *t.Value
+				}
 			}
 
-			if !scanner.IsCompliant(tags.Tags, auditRule) {
+			if !scanner.IsCompliant(tagMap, auditRule) {
 				resources = append(resources, scanner.Resource{
 					Type: "DynamoDB Table",
 					ID:   tableName,

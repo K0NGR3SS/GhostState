@@ -1,69 +1,71 @@
-package aws
+package computing
 
 import (
 	"context"
 	"fmt"
 	"sync"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanEC2(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := ec2.NewFromConfig(cfg)
-	regions, err := client.DescribeRegions(context.TODO(), &ec2.DescribeRegionsInput{
-		AllRegions: aws.Bool(true),
-	})
+type EC2Scanner struct {
+	baseCfg aws.Config
+}
+
+func NewEC2Scanner(cfg aws.Config) *EC2Scanner {
+	return &EC2Scanner{baseCfg: cfg}
+}
+
+func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	client := ec2.NewFromConfig(s.baseCfg)
+	regions, err := client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{AllRegions: aws.Bool(true)})
 	if err != nil {
-		send(p, "EC2: error listing regions: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing regions: %w", err)
 	}
 
+	var mu sync.Mutex
+	var resources []scanner.Resource
 	var wg sync.WaitGroup
 
 	for _, r := range regions.Regions {
-		if r.RegionName == nil {
-			continue
-		}
-		rName := *r.RegionName
+		if r.RegionName == nil { continue }
+		region := *r.RegionName
 
 		wg.Add(1)
-		go func(region string) {
+		go func(reg string) {
 			defer wg.Done()
 
-			regCfg := cfg.Copy()
-			regCfg.Region = region
+			regCfg := s.baseCfg.Copy()
+			regCfg.Region = reg
 			regClient := ec2.NewFromConfig(regCfg)
 
-			resp, err := regClient.DescribeInstances(context.TODO(), &ec2.DescribeInstancesInput{})
-			if err != nil {
-				return
-			}
+			resp, err := regClient.DescribeInstances(ctx, &ec2.DescribeInstancesInput{})
+			if err != nil { return }
 
 			for _, res := range resp.Reservations {
 				for _, inst := range res.Instances {
-					if inst.State.Name == types.InstanceStateNameTerminated {
-						continue
-					}
+					if inst.State.Name == types.InstanceStateNameTerminated { continue }
 
-					hasTag := false
+					tagMap := make(map[string]string)
 					for _, t := range inst.Tags {
-						if t.Key != nil && t.Value != nil &&
-							*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-							hasTag = true
-							break
-						}
+						if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
 					}
 
-					if !hasTag {
-						send(p, fmt.Sprintf("EC2: [%s] %s", region, *inst.InstanceId))
+					if !scanner.IsCompliant(tagMap, rule) {
+						mu.Lock()
+						resources = append(resources, scanner.Resource{
+							Type: "EC2 Instance",
+							ID:   fmt.Sprintf("[%s] %s", reg, *inst.InstanceId),
+							ARN:  *inst.InstanceId,
+						})
+						mu.Unlock()
 					}
 				}
 			}
-		}(rName)
+		}(region)
 	}
-
 	wg.Wait()
+	return resources, nil
 }

@@ -1,46 +1,49 @@
-package aws
+package data
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanS3(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := s3.NewFromConfig(cfg)
+type S3Scanner struct {
+	client *s3.Client
+}
 
-	resp, err := client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+func NewS3Scanner(cfg aws.Config) *S3Scanner {
+	return &S3Scanner{client: s3.NewFromConfig(cfg)}
+}
+
+func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+	
+	resp, err := s.client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
-		send(p, "S3: error listing buckets: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing buckets: %w", err)
 	}
 
 	for _, b := range resp.Buckets {
-		if b.Name == nil {
-			continue
-		}
-		bucketName := *b.Name
+		if b.Name == nil { continue }
+		name := *b.Name
 
-		tagsResp, err := client.GetBucketTagging(context.TODO(), &s3.GetBucketTaggingInput{
-			Bucket: &bucketName,
-		})
+		tagsResp, err := s.client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: &name})
+		tagMap := make(map[string]string)
 
-		hasTag := false
 		if err == nil {
 			for _, t := range tagsResp.TagSet {
-				if t.Key != nil && t.Value != nil &&
-					*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-					hasTag = true
-					break
-				}
+				if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
 			}
 		}
 
-		if !hasTag {
-			send(p, fmt.Sprintf("S3:  %s", bucketName))
+		if !scanner.IsCompliant(tagMap, rule) {
+			resources = append(resources, scanner.Resource{
+				Type: "S3 Bucket",
+				ID:   name,
+				ARN:  fmt.Sprintf("arn:aws:s3:::%s", name),
+			})
 		}
 	}
+	return resources, nil
 }

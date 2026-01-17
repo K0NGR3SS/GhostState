@@ -1,28 +1,48 @@
-package aws
+package security
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanSecGroups(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := ec2.NewFromConfig(cfg)
+type SGScanner struct {
+	client *ec2.Client
+}
 
-	out, err := client.DescribeSecurityGroups(context.TODO(), &ec2.DescribeSecurityGroupsInput{})
+func NewSGScanner(cfg aws.Config) *SGScanner {
+	return &SGScanner{client: ec2.NewFromConfig(cfg)}
+}
+
+func (s *SGScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+
+	out, err := s.client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{})
 	if err != nil {
-		send(p, "SG: error listing security groups: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing security groups: %w", err)
 	}
 
 	for _, sg := range out.SecurityGroups {
 		id := aws.ToString(sg.GroupId)
 		name := aws.ToString(sg.GroupName)
-		vpc := aws.ToString(sg.VpcId)
 
-		send(p, fmt.Sprintf("SG: id=%s name=%s vpc=%s", id, name, vpc))
+		tags := make(map[string]string)
+		for _, t := range sg.Tags {
+			if t.Key != nil && t.Value != nil {
+				tags[*t.Key] = *t.Value
+			}
+		}
+
+		if !scanner.IsCompliant(tags, rule) {
+			resources = append(resources, scanner.Resource{
+				Type: "Security Group",
+				ID:   fmt.Sprintf("%s (%s)", name, id),
+				ARN:  id,
+			})
+		}
 	}
+
+	return resources, nil
 }
