@@ -1,32 +1,49 @@
-package aws
+package networking
 
 import (
 	"context"
 	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanCloudfront(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := cloudfront.NewFromConfig(cfg)
+type CloudFrontScanner struct {
+	client *cloudfront.Client
+}
 
-	listOut, err := client.ListDistributions(context.TODO(), &cloudfront.ListDistributionsInput{})
+func NewCloudFrontScanner(cfg aws.Config) *CloudFrontScanner {
+	return &CloudFrontScanner{client: cloudfront.NewFromConfig(cfg)}
+}
+
+func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+
+	listOut, err := s.client.ListDistributions(ctx, &cloudfront.ListDistributionsInput{})
 	if err != nil {
-		send(p, "CF: error listing distributions: "+err.Error())
-		return
+		return nil, fmt.Errorf("listing distributions: %w", err)
 	}
 
-	if listOut.DistributionList == nil {
-		return
-	}
+	if listOut.DistributionList == nil { return nil, nil }
 
 	for _, item := range listOut.DistributionList.Items {
-		id := aws.ToString(item.Id)
-		domain := aws.ToString(item.DomainName)
-		status := aws.ToString(item.Status)
-		enabled := item.Enabled
-		send(p, fmt.Sprintf("CloudFront: id=%s domain=%s enabled=%t status=%s (Tag check skipped)", id, domain, enabled, status))
+		tagsOut, err := s.client.ListTagsForResource(ctx, &cloudfront.ListTagsForResourceInput{Resource: item.ARN})
+		if err != nil { continue }
+
+		tagMap := make(map[string]string)
+		if tagsOut.Tags != nil {
+			for _, t := range tagsOut.Tags.Items {
+				if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
+			}
+		}
+
+		if !scanner.IsCompliant(tagMap, rule) {
+			resources = append(resources, scanner.Resource{
+				Type: "CloudFront Dist",
+				ID:   aws.ToString(item.DomainName),
+				ARN:  aws.ToString(item.ARN),
+			})
+		}
 	}
+	return resources, nil
 }

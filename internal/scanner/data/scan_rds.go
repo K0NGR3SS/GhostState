@@ -1,83 +1,64 @@
-package aws
+package data
 
 import (
 	"context"
-	"fmt"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func scanRDS(cfg aws.Config, p *tea.Program, conf AuditConfig) {
-	client := rds.NewFromConfig(cfg)
+type RDSScanner struct {
+	client *rds.Client
+}
 
-	instOut, err := client.DescribeDBInstances(context.TODO(), &rds.DescribeDBInstancesInput{})
-	if err != nil {
-		send(p, "RDS: error describing DB instances: "+err.Error())
-	} else {
+func NewRDSScanner(cfg aws.Config) *RDSScanner {
+	return &RDSScanner{client: rds.NewFromConfig(cfg)}
+}
+
+func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var resources []scanner.Resource
+
+	instOut, err := s.client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{})
+	if err == nil {
 		for _, db := range instOut.DBInstances {
-			id := aws.ToString(db.DBInstanceIdentifier)
-			engine := aws.ToString(db.Engine)
-			engineVer := aws.ToString(db.EngineVersion)
-			public := db.PubliclyAccessible
-			enc := db.StorageEncrypted
-			backupWindow := aws.ToString(db.PreferredBackupWindow)
-
-			hasTag := false
-			tagOut, err := client.ListTagsForResource(context.TODO(), &rds.ListTagsForResourceInput{
-				ResourceName: db.DBInstanceArn,
-			})
-			if err == nil {
-				for _, t := range tagOut.TagList {
-					if t.Key != nil && t.Value != nil &&
-						*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-						hasTag = true
-						break
-					}
-				}
-			}
-
-			if !hasTag {
-				send(p, fmt.Sprintf(
-					"RDS: instance=%s engine=%s(%s) public=%t encrypted=%t backupWindow=%s",
-					id, engine, engineVer, public, enc, backupWindow,
-				))
-			}
-		}
-	}
-
-	clOut, err := client.DescribeDBClusters(context.TODO(), &rds.DescribeDBClustersInput{})
-	if err != nil {
-		return
-	}
-
-	for _, cl := range clOut.DBClusters {
-		id := aws.ToString(cl.DBClusterIdentifier)
-		engine := aws.ToString(cl.Engine)
-		engineVer := aws.ToString(cl.EngineVersion)
-		enc := cl.StorageEncrypted
-		backtrack := cl.BacktrackWindow
-
-		hasTag := false
-		tagOut, err := client.ListTagsForResource(context.TODO(), &rds.ListTagsForResourceInput{
-			ResourceName: cl.DBClusterArn,
-		})
-		if err == nil {
+			tagOut, err := s.client.ListTagsForResource(ctx, &rds.ListTagsForResourceInput{ResourceName: db.DBInstanceArn})
+			if err != nil { continue }
+			
+			tagMap := make(map[string]string)
 			for _, t := range tagOut.TagList {
-				if t.Key != nil && t.Value != nil &&
-					*t.Key == conf.TargetKey && *t.Value == conf.TargetVal {
-					hasTag = true
-					break
-				}
+				if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
+			}
+
+			if !scanner.IsCompliant(tagMap, rule) {
+				resources = append(resources, scanner.Resource{
+					Type: "RDS Instance",
+					ID:   aws.ToString(db.DBInstanceIdentifier),
+					ARN:  aws.ToString(db.DBInstanceArn),
+				})
 			}
 		}
+	}
 
-		if !hasTag {
-			send(p, fmt.Sprintf(
-				"RDS-Cluster: id=%s engine=%s(%s) encrypted=%t backtrackWindow=%d",
-				id, engine, engineVer, enc, backtrack,
-			))
+	clOut, err := s.client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{})
+	if err == nil {
+		for _, cl := range clOut.DBClusters {
+			tagOut, err := s.client.ListTagsForResource(ctx, &rds.ListTagsForResourceInput{ResourceName: cl.DBClusterArn})
+			if err != nil { continue }
+
+			tagMap := make(map[string]string)
+			for _, t := range tagOut.TagList {
+				if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
+			}
+
+			if !scanner.IsCompliant(tagMap, rule) {
+				resources = append(resources, scanner.Resource{
+					Type: "RDS Cluster",
+					ID:   aws.ToString(cl.DBClusterIdentifier),
+					ARN:  aws.ToString(cl.DBClusterArn),
+				})
+			}
 		}
 	}
+
+	return resources, nil
 }
