@@ -18,7 +18,7 @@ GhostState has been upgraded with a powerful **Risk Analysis Engine** and **Safe
     *   **ALL:** Displays the full infrastructure inventory.
     *   **RISK:** Filters purely for **Critical** (💀), **High** (🚨), and **Medium** (⚠️) security issues.
     *   **GHOST:** Filters for unused or "shadow" resources (e.g., unattached IPs, empty clusters).
-*   **Tag Compliance:** Now enforces governance by filtering resources missing specific tags (e.g., `CohortKey: Cohort`), helping you spot drift immediately.
+*   **Tag Compliance:** Now enforces governance by filtering resources missing specific tags (e.g., `ManagedBy: Terraform`), helping you spot drift immediately.
 *   **Safety Categorization:** Results are visually categorized by risk level, making it easy to prioritize remediation.
 
 ## Risk & Safety Checks
