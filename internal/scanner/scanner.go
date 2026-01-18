@@ -6,10 +6,14 @@ type Resource struct {
 	Type string
 	ID   string
 	ARN  string
+	Tags map[string]string 
 }
 
 type AuditRule struct {
+
 	Tags map[string]string 
+	TargetKey string
+	TargetVal string
 }
 
 type AuditConfig struct {
@@ -17,6 +21,9 @@ type AuditConfig struct {
 	ScanACM, ScanSecGroups, ScanECS          bool
 	ScanCloudfront, ScanLambda, ScanDynamoDB bool
 	ScanVPC                                  bool
+
+	ScanEBS, ScanIAM, ScanSecrets, ScanCloudWatch bool
+	ScanEIP, ScanELB, ScanECR, ScanEKS, ScanKMS   bool
 	
 	TargetRule AuditRule
 }
@@ -24,17 +31,29 @@ type AuditConfig struct {
 type Scanner interface {
 	Scan(ctx context.Context, rule AuditRule) ([]Resource, error)
 }
-
 func IsCompliant(resourceTags map[string]string, rule AuditRule) bool {
-	if len(rule.Tags) == 0 {
-		return true 
+	if len(rule.Tags) > 0 {
+		for key, requiredVal := range rule.Tags {
+			val, ok := resourceTags[key]
+			if !ok || val != requiredVal {
+				return false
+			}
+		}
 	}
 
-	for key, requiredVal := range rule.Tags {
-		val, ok := resourceTags[key]
-		if !ok || val != requiredVal {
+	if rule.TargetKey != "" {
+		val, ok := resourceTags[rule.TargetKey]
+		if !ok {
+			return false
+		}
+		if rule.TargetVal != "" && val != rule.TargetVal {
 			return false
 		}
 	}
+
 	return true
+}
+
+func MatchesRule(tags map[string]string, rule AuditRule) bool {
+	return IsCompliant(tags, rule)
 }

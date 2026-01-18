@@ -63,6 +63,7 @@ type Model struct {
 	startTime time.Time
 	duration  time.Duration
 }
+
 func InitialModel() Model {
 	s := spinner.New()
 	s.Spinner = spinner.Meter
@@ -82,23 +83,34 @@ func InitialModel() Model {
 	tVal.Width = 30
 	tVal.PromptStyle = inputStyle
 	tVal.TextStyle = inputStyle
-
+``
 	choices := []string{
-		"ALL SERVICES",
-		"COMPUTING",
-		"  EC2 Instances",
-		"  ECS Clusters",
-		"  Lambda Functions",
-		"DATA & STORAGE",
-		"  S3 Buckets",
-		"  RDS Databases",
-		"  DynamoDB Tables",
-		"  ElastiCache Clusters",
-		"NETWORKING & SECURITY",
-		"  VPC Stack (VPC, Subnets, IGW)",
-		"  CloudFront Distributions",
-		"  ACM Certificates",
-		"  Security Groups",
+		"ALL SERVICES",                 // 0
+		"COMPUTING",                    // 1
+		"  EC2 Instances",              // 2
+		"  ECS Clusters",               // 3
+		"  Lambda Functions",           // 4
+		"  EKS Clusters (K8s)",         // 5
+		"  ECR Repositories",           // 6
+		"DATA & STORAGE",               // 7
+		"  S3 Buckets",                 // 8
+		"  RDS Databases",              // 9
+		"  DynamoDB Tables",            // 10
+		"  ElastiCache Clusters",       // 11
+		"  EBS Volumes",                // 12
+		"NETWORKING",                   // 13
+		"  VPC Stack (VPC/Subnets)",    // 14
+		"  CloudFront Distributions",   // 15
+		"  Elastic IPs (EIP)",          // 16
+		"  Load Balancers (ELB)",       // 17
+		"SECURITY & IDENTITY",          // 18
+		"  Security Groups",            // 19
+		"  ACM Certificates",           // 20
+		"  IAM Users",                  // 21
+		"  Secrets Manager",            // 22
+		"  KMS Keys",                   // 23
+		"MONITORING",                   // 24
+		"  CloudWatch Alarms",          // 25
 	}
 
 	sel := make(map[int]bool)
@@ -182,26 +194,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
 func (m *Model) handleSelection() {
 	m.selected[m.cursor] = !m.selected[m.cursor]
 	val := m.selected[m.cursor]
+
 	switch m.cursor {
-	case 0:
+	case 0: // ALL
 		for i := range m.choices {
 			m.selected[i] = val
 		}
-	case 1:
-		for i := 2; i <= 4; i++ {
+	case 1: // COMPUTING
+		for i := 2; i <= 6; i++ {
 			m.selected[i] = val
 		}
-	case 5:
-		for i := 6; i <= 9; i++ {
+	case 7: // DATA
+		for i := 8; i <= 12; i++ {
 			m.selected[i] = val
 		}
-	case 10:
-		for i := 11; i <= 14; i++ {
+	case 13: // NETWORKING
+		for i := 14; i <= 17; i++ {
 			m.selected[i] = val
 		}
+	case 18: // SECURITY
+		for i := 19; i <= 23; i++ {
+			m.selected[i] = val
+		}
+	case 24: // MONITORING
+		m.selected[25] = val
 	}
 }
 
@@ -230,35 +250,29 @@ func (m Model) startScanCmd() tea.Cmd {
 	return func() tea.Msg {
 		rawKeys := m.inputs[0].Value()
 		rawVals := m.inputs[1].Value()
-
-		tags := make(map[string]string)
-
-		keys := strings.Split(rawKeys, ",")
-		vals := strings.Split(rawVals, ",")
-
-		for i, k := range keys {
-			k = strings.TrimSpace(k)
-			if k == "" {
-				continue
-			}
-			v := ""
-			if i < len(vals) {
-				v = strings.TrimSpace(vals[i])
-			}
-			tags[k] = v
-		}
-
-		if len(tags) == 0 {
-			tags["ManagedBy"] = "Terraform"
-		}
-
 		conf := scanner.AuditConfig{
+			// Computing
 			ScanEC2: m.selected[2], ScanECS: m.selected[3], ScanLambda: m.selected[4],
-			ScanS3: m.selected[6], ScanRDS: m.selected[7], ScanDynamoDB: m.selected[8], ScanElasti: m.selected[9],
-			ScanVPC: m.selected[11], ScanCloudfront: m.selected[12], ScanACM: m.selected[13], ScanSecGroups: m.selected[14],
-			
+			ScanEKS: m.selected[5], ScanECR: m.selected[6],
+
+			// Data
+			ScanS3: m.selected[8], ScanRDS: m.selected[9], ScanDynamoDB: m.selected[10], 
+			ScanElasti: m.selected[11], ScanEBS: m.selected[12],
+
+			// Network
+			ScanVPC: m.selected[14], ScanCloudfront: m.selected[15], 
+			ScanEIP: m.selected[16], ScanELB: m.selected[17],
+
+			// Security
+			ScanSecGroups: m.selected[19], ScanACM: m.selected[20], 
+			ScanIAM: m.selected[21], ScanSecrets: m.selected[22], ScanKMS: m.selected[23],
+
+			// Monitoring
+			ScanCloudWatch: m.selected[25],
+
 			TargetRule: scanner.AuditRule{
-				Tags: tags,
+				TargetKey: rawKeys,
+				TargetVal: rawVals,
 			},
 		}
 
@@ -281,21 +295,27 @@ func getCategory(res string) string {
 		return strings.Contains(res, "["+strings.ToLower(t))
 	}
 
-	if isType("VPC") || isType("Subnet") || isType("Internet Gateway") || isType("NAT Gateway") || isType("CloudFront") || isType("ACM Certificate") || isType("Security Group") {
-		return "NETWORKING & SECURITY"
+	if isType("VPC") || isType("Subnet") || isType("Internet Gateway") || isType("CloudFront") || isType("EIP") || isType("Load Balancer") {
+		return "NETWORKING"
 	}
-	if isType("EC2") || isType("ECS") || isType("Lambda") {
+	if isType("EC2") || isType("ECS") || isType("Lambda") || isType("EKS") || isType("ECR") {
 		return "COMPUTING"
 	}
-	if isType("S3") || isType("RDS") || isType("DynamoDB") || isType("ElastiCache") {
+	if isType("S3") || isType("RDS") || isType("DynamoDB") || isType("ElastiCache") || isType("EBS") {
 		return "DATA & STORAGE"
+	}
+	if isType("Security Group") || isType("ACM Certificate") || isType("IAM") || isType("Secret") || isType("KMS") {
+		return "SECURITY & IDENTITY"
+	}
+	if isType("CloudWatch") || isType("Alarm") {
+		return "MONITORING"
 	}
 	return "OTHER"
 }
 
 func (m Model) renderResults() string {
 	s := ""
-	categories := []string{"COMPUTING", "DATA & STORAGE", "NETWORKING & SECURITY", "OTHER"}
+	categories := []string{"COMPUTING", "DATA & STORAGE", "NETWORKING", "SECURITY & IDENTITY", "MONITORING", "OTHER"}
 
 	for _, cat := range categories {
 		if items, ok := m.results[cat]; ok && len(items) > 0 {
@@ -326,7 +346,7 @@ func (m Model) View() string {
 				checked = "[x]"
 			}
 			line := fmt.Sprintf("%s %s %s", cursor, checked, choice)
-			if i == 0 || i == 1 || i == 5 || i == 10 {
+			if i == 0 || i == 1 || i == 7 || i == 13 || i == 18 || i == 24 {
 				s += sectionStyle.Render(line) + "\n"
 			} else {
 				s += selectedStyle.Render(line) + "\n"

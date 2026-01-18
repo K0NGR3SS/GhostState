@@ -9,8 +9,10 @@ import (
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
+type FoundMsg string
+type FinishedMsg struct{}
+
 func ScanAll(p *tea.Program, conf scanner.AuditConfig) {
-	// 1. Load AWS Config
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		p.Send(FoundMsg(fmt.Sprintf("Error loading AWS config: %v", err)))
