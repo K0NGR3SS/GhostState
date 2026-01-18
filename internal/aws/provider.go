@@ -41,6 +41,7 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	// Helper closure to run scans safely
 	run := func(s interface {
 		Scan(context.Context, scanner.AuditRule) ([]scanner.Resource, error)
 	}) {
@@ -67,13 +68,13 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		go run(computing.NewLambdaScanner(p.cfg))
 	}
 	if conf.ScanEKS {
-        wg.Add(1)
-        go run(computing.NewEKSScanner(p.cfg))
-    }
-    if conf.ScanECR { 
-        wg.Add(1)
-        go run(computing.NewECRScanner(p.cfg))
-    }
+		wg.Add(1)
+		go run(computing.NewEKSScanner(p.cfg))
+	}
+	if conf.ScanECR {
+		wg.Add(1)
+		go run(computing.NewECRScanner(p.cfg))
+	}
 
 	// --- Data ---
 	if conf.ScanS3 {
@@ -84,15 +85,15 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(data.NewRDSScanner(p.cfg))
 	}
+	// [FIXED] Using the correct helper `run` and `p.cfg`
 	if conf.ScanDynamoDB {
 		wg.Add(1)
-		go run(data.NewDynamoDBScanner(p.cfg, p.accountID, p.region))
+		go run(data.NewDynamoDBScanner(p.cfg))
 	}
 	if conf.ScanElasti {
 		wg.Add(1)
 		go run(data.NewElastiScanner(p.cfg))
 	}
-
 	if conf.ScanEBS {
 		wg.Add(1)
 		go run(data.NewEBSScanner(p.cfg))
@@ -108,13 +109,13 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		go run(network.NewCloudFrontScanner(p.cfg))
 	}
 	if conf.ScanEIP {
-        wg.Add(1)
-        go run(network.NewEIPScanner(p.cfg))
-    }
-    if conf.ScanELB {
-        wg.Add(1)
-        go run(network.NewELBScanner(p.cfg))
-    }
+		wg.Add(1)
+		go run(network.NewEIPScanner(p.cfg))
+	}
+	if conf.ScanELB {
+		wg.Add(1)
+		go run(network.NewELBScanner(p.cfg))
+	}
 
 	// --- Security ---
 	if conf.ScanACM {
@@ -125,22 +126,20 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(security.NewSGScanner(p.cfg))
 	}
-
 	if conf.ScanIAM {
 		wg.Add(1)
 		go run(security.NewIAMScanner(p.cfg))
 	}
-
 	if conf.ScanSecrets {
 		wg.Add(1)
 		go run(security.NewSecretsScanner(p.cfg))
 	}
 	if conf.ScanKMS {
-        wg.Add(1)
-        go run(security.NewKMSScanner(p.cfg))
-    }
+		wg.Add(1)
+		go run(security.NewKMSScanner(p.cfg))
+	}
 
-	// --- Monitoring (NEW) ---
+	// --- Monitoring ---
 	if conf.ScanCloudWatch {
 		wg.Add(1)
 		go run(monitoring.NewCloudWatchScanner(p.cfg))

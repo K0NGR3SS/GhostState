@@ -2,53 +2,66 @@ package computing
 
 import (
 	"context"
-	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
-	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
-	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type ECSScanner struct {
-	client *ecs.Client
+	Client *ecs.Client
 }
 
 func NewECSScanner(cfg aws.Config) *ECSScanner {
-	return &ECSScanner{client: clients.NewECS(cfg)}
+	return &ECSScanner{Client: ecs.NewFromConfig(cfg)}
 }
 
 func (s *ECSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	var resources []scanner.Resource
-
-	listOut, err := s.client.ListClusters(ctx, &ecs.ListClustersInput{})
+	out, err := s.Client.ListClusters(ctx, &ecs.ListClustersInput{})
 	if err != nil {
-		return nil, fmt.Errorf("listing clusters: %w", err)
+		return nil, err
 	}
-	if len(listOut.ClusterArns) == 0 { return nil, nil }
+	if len(out.ClusterArns) == 0 {
+		return nil, nil
+	}
 
-	descOut, err := s.client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
-		Clusters: listOut.ClusterArns,
-		Include:  []types.ClusterField{types.ClusterFieldTags},
+	desc, err := s.Client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
+		Clusters: out.ClusterArns,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("describing clusters: %w", err)
+		return nil, err
 	}
 
-	for _, cl := range descOut.Clusters {
-		tagMap := make(map[string]string)
-		for _, t := range cl.Tags {
-			if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
+	var results []scanner.Resource
+	for _, c := range desc.Clusters {
+		risk := "SAFE"
+		info := ""
+
+		if c.RegisteredContainerInstancesCount == 0 && c.RunningTasksCount == 0 {
+			risk = "LOW"
+			info = "Empty Cluster (No Instances/Tasks)"
 		}
 
-		if !scanner.IsCompliant(tagMap, rule) {
-			resources = append(resources, scanner.Resource{
+		if rule.ScanMode == "RISK" {
+			if risk == "SAFE" || risk == "LOW" { continue }
+		}
+		if rule.ScanMode == "GHOST" {
+			if risk == "SAFE" { continue }
+		}
+
+		tags := make(map[string]string)
+		for _, t := range c.Tags {
+			if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
+		}
+
+		if scanner.MatchesRule(tags, rule) {
+			results = append(results, scanner.Resource{
+				ID:   *c.ClusterName,
 				Type: "ECS Cluster",
-				ID:   aws.ToString(cl.ClusterName),
-				ARN:  aws.ToString(cl.ClusterArn),
+				Tags: tags,
+				Risk: risk,
+				Info: info,
 			})
 		}
 	}
-
-	return resources, nil
+	return results, nil
 }
