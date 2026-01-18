@@ -2,62 +2,59 @@ package data
 
 import (
 	"context"
-	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type DynamoDBScanner struct {
-	client    *dynamodb.Client
-	accountID string
-	region    string
+	Client *dynamodb.Client
 }
 
-func NewDynamoDBScanner(cfg aws.Config, accountID, region string) *DynamoDBScanner {
-	return &DynamoDBScanner{
-		client:    clients.NewDynamoDB(cfg),
-		accountID: accountID,
-		region:    region,
+func NewDynamoDBScanner(cfg aws.Config) *DynamoDBScanner {
+	return &DynamoDBScanner{Client: dynamodb.NewFromConfig(cfg)}
+}
+
+func (s *DynamoDBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	out, err := s.Client.ListTables(ctx, &dynamodb.ListTablesInput{})
+	if err != nil {
+		return nil, err
 	}
-}
 
-func (s *DynamoDBScanner) Scan(ctx context.Context, auditRule scanner.AuditRule) ([]scanner.Resource, error) {
-	var resources []scanner.Resource
+	var results []scanner.Resource
+	for _, tableName := range out.TableNames {
+		risk := "SAFE"
+		info := ""
 
-	paginator := dynamodb.NewListTablesPaginator(s.client, &dynamodb.ListTablesInput{})
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list DynamoDB tables: %w", err)
+		// Check Backups
+		desc, err := s.Client.DescribeContinuousBackups(ctx, &dynamodb.DescribeContinuousBackupsInput{
+			TableName: &tableName,
+		})
+		
+		if err == nil {
+			cb := desc.ContinuousBackupsDescription
+			if cb.PointInTimeRecoveryDescription == nil || 
+			   cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus == "DISABLED" {
+				risk = "MEDIUM"
+				info = "Backups Disabled"
+			}
 		}
 
-		for _, tableName := range page.TableNames {
-			tableArn := fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", s.region, s.accountID, tableName)
-			
-			tags, err := s.client.ListTagsOfResource(ctx, &dynamodb.ListTagsOfResourceInput{
-				ResourceArn: aws.String(tableArn),
+		if rule.ScanMode == "RISK" {
+			if risk == "SAFE" || risk == "LOW" { continue }
+		}
+
+		tags := map[string]string{}
+
+		if scanner.MatchesRule(tags, rule) {
+			results = append(results, scanner.Resource{
+				ID:   tableName,
+				Type: "DynamoDB Table",
+				Tags: tags,
+				Risk: risk,
+				Info: info,
 			})
-			if err != nil { continue }
-
-			tagMap := make(map[string]string)
-			for _, t := range tags.Tags {
-				if t.Key != nil && t.Value != nil {
-					tagMap[*t.Key] = *t.Value
-				}
-			}
-
-			if !scanner.IsCompliant(tagMap, auditRule) {
-				resources = append(resources, scanner.Resource{
-					Type: "DynamoDB Table",
-					ID:   tableName,
-					ARN:  tableArn,
-				})
-			}
 		}
 	}
-
-	return resources, nil
+	return results, nil
 }

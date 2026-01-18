@@ -2,49 +2,58 @@ package network
 
 import (
 	"context"
-	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
-	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type CloudFrontScanner struct {
-	client *cloudfront.Client
+	Client *cloudfront.Client
 }
 
 func NewCloudFrontScanner(cfg aws.Config) *CloudFrontScanner {
-	return &CloudFrontScanner{client: clients.NewCloudFront(cfg)}
+	return &CloudFrontScanner{Client: cloudfront.NewFromConfig(cfg)}
 }
 
 func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	var resources []scanner.Resource
-
-	listOut, err := s.client.ListDistributions(ctx, &cloudfront.ListDistributionsInput{})
+	out, err := s.Client.ListDistributions(ctx, &cloudfront.ListDistributionsInput{})
 	if err != nil {
-		return nil, fmt.Errorf("listing distributions: %w", err)
+		return nil, err
 	}
 
-	if listOut.DistributionList == nil { return nil, nil }
+	var results []scanner.Resource
+	if out.DistributionList != nil {
+		for _, d := range out.DistributionList.Items {
+			risk := "SAFE"
+			info := ""
 
-	for _, item := range listOut.DistributionList.Items {
-		tagsOut, err := s.client.ListTagsForResource(ctx, &cloudfront.ListTagsForResourceInput{Resource: item.ARN})
-		if err != nil { continue }
+			if d.WebACLId == nil || *d.WebACLId == "" {
+				risk = "MEDIUM"
+				info = "No WAF Attached"
+			} else if !*d.Enabled {
+				risk = "LOW"
+				info = "Distribution Disabled"
+			}
 
-		tagMap := make(map[string]string)
-		if tagsOut.Tags != nil {
-			for _, t := range tagsOut.Tags.Items {
-				if t.Key != nil && t.Value != nil { tagMap[*t.Key] = *t.Value }
+			if rule.ScanMode == "RISK" {
+				if risk == "SAFE" || risk == "LOW" { continue }
+			}
+			if rule.ScanMode == "GHOST" {
+				if *d.Enabled { continue }
+			}
+
+			tags := map[string]string{}
+
+			if scanner.MatchesRule(tags, rule) {
+				results = append(results, scanner.Resource{
+					ID:   *d.DomainName,
+					Type: "CloudFront Dist",
+					Tags: tags,
+					Risk: risk,
+					Info: info,
+				})
 			}
 		}
-
-		if !scanner.IsCompliant(tagMap, rule) {
-			resources = append(resources, scanner.Resource{
-				Type: "CloudFront Dist",
-				ID:   aws.ToString(item.DomainName),
-				ARN:  aws.ToString(item.ARN),
-			})
-		}
 	}
-	return resources, nil
+	return results, nil
 }

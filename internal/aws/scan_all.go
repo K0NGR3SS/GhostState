@@ -9,30 +9,47 @@ import (
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-type FoundMsg string
+// FoundMsg carries the full resource object
+type FoundMsg scanner.Resource 
+
+// FinishedMsg signals completion
 type FinishedMsg struct{}
 
 func ScanAll(p *tea.Program, conf scanner.AuditConfig) {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		p.Send(FoundMsg(fmt.Sprintf("Error loading AWS config: %v", err)))
+        // Create an "Error Resource" to display the failure
+		p.Send(FoundMsg(scanner.Resource{
+			ID:   fmt.Sprintf("Error loading AWS config: %v", err),
+			Type: "❌ FATAL ERROR",
+            Risk: "CRITICAL",
+		}))
 		p.Send(FinishedMsg{})
 		return
 	}
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
-		p.Send(FoundMsg(fmt.Sprintf("Error initializing provider: %v", err)))
+		p.Send(FoundMsg(scanner.Resource{
+			ID:   fmt.Sprintf("Error initializing provider: %v", err),
+			Type: "❌ FATAL ERROR",
+            Risk: "CRITICAL",
+		}))
 		p.Send(FinishedMsg{})
 		return
 	}
+
 	results, err := provider.ScanAll(context.TODO(), conf)
 	if err != nil {
-		p.Send(FoundMsg(fmt.Sprintf("Scan error: %v", err)))
+        p.Send(FoundMsg(scanner.Resource{
+			ID:   fmt.Sprintf("Scan Error: %v", err),
+			Type: "❌ SCAN ERROR",
+            Risk: "HIGH",
+		}))
 	}
+	
 	for _, res := range results {
-		msg := fmt.Sprintf("[%s] %s", res.Type, res.ID)
-		p.Send(FoundMsg(msg))
+		p.Send(FoundMsg(res))
 	}
 	p.Send(FinishedMsg{})
 }

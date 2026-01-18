@@ -8,40 +8,49 @@ import (
 )
 
 type EIPScanner struct {
-	client *ec2.Client
+	Client *ec2.Client
 }
 
 func NewEIPScanner(cfg aws.Config) *EIPScanner {
-	return &EIPScanner{client: ec2.NewFromConfig(cfg)}
+	return &EIPScanner{Client: ec2.NewFromConfig(cfg)}
 }
 
 func (s *EIPScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	// List all addresses
-	out, err := s.client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{})
+	out, err := s.Client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{})
 	if err != nil {
 		return nil, err
 	}
 
-	var res []scanner.Resource
+	var results []scanner.Resource
 	for _, addr := range out.Addresses {
+		risk := "SAFE"
+		info := ""
 		if addr.AssociationId == nil {
-			
-			tags := make(map[string]string)
-			for _, t := range addr.Tags {
-				if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
-			}
+			risk = "LOW"
+			info = "Unused IP (Wasting Cost)"
+		}
 
-			if scanner.MatchesRule(tags, rule) {
-				ip := "unknown"
-				if addr.PublicIp != nil { ip = *addr.PublicIp }
-				
-				res = append(res, scanner.Resource{
-					ID:   ip,
-					Type: "👻 [Unused EIP]",
-					Tags: tags,
-				})
-			}
+		if rule.ScanMode == "RISK" {
+			continue 
+		}
+		if rule.ScanMode == "GHOST" {
+			if risk == "SAFE" { continue }
+		}
+
+		tags := make(map[string]string)
+		for _, t := range addr.Tags {
+			if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
+		}
+
+		if scanner.MatchesRule(tags, rule) {
+			results = append(results, scanner.Resource{
+				ID:   *addr.PublicIp,
+				Type: "Elastic IP",
+				Tags: tags,
+				Risk: risk,
+				Info: info,
+			})
 		}
 	}
-	return res, nil
+	return results, nil
 }
