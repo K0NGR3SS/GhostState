@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -14,7 +15,7 @@ type ECSScanner struct {
 }
 
 func NewECSScanner(cfg aws.Config) *ECSScanner {
-	return &ECSScanner{client: ecs.NewFromConfig(cfg)}
+	return &ECSScanner{client: clients.NewECS(cfg)}
 }
 
 func (s *ECSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {

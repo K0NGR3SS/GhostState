@@ -1,4 +1,4 @@
-package networking
+package network
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -14,8 +15,9 @@ type VPCScanner struct {
 }
 
 func NewVPCScanner(cfg aws.Config) *VPCScanner {
+	// VPC uses EC2 client
 	return &VPCScanner{
-		client: ec2.NewFromConfig(cfg),
+		client: clients.NewVPC(cfg), 
 	}
 }
 
@@ -71,7 +73,9 @@ func (s *VPCScanner) Scan(ctx context.Context, auditRule scanner.AuditRule) ([]s
 func (s *VPCScanner) isCompliant(ec2Tags []types.Tag, rule scanner.AuditRule) bool {
 	tagMap := make(map[string]string)
 	for _, t := range ec2Tags {
-		tagMap[*t.Key] = *t.Value
+		if t.Key != nil && t.Value != nil {
+			tagMap[*t.Key] = *t.Value
+		}
 	}
 	return scanner.IsCompliant(tagMap, rule)
 }

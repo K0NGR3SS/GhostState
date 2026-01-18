@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -13,7 +14,7 @@ type SGScanner struct {
 }
 
 func NewSGScanner(cfg aws.Config) *SGScanner {
-	return &SGScanner{client: ec2.NewFromConfig(cfg)}
+	return &SGScanner{client: clients.NewSecurityGroup(cfg)}
 }
 
 func (s *SGScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {

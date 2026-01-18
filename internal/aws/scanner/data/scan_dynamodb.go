@@ -5,18 +5,19 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type DynamoDBScanner struct {
-	client      *dynamodb.Client
-	accountID   string
-	region      string
+	client    *dynamodb.Client
+	accountID string
+	region    string
 }
 
 func NewDynamoDBScanner(cfg aws.Config, accountID, region string) *DynamoDBScanner {
 	return &DynamoDBScanner{
-		client:    dynamodb.NewFromConfig(cfg),
+		client:    clients.NewDynamoDB(cfg),
 		accountID: accountID,
 		region:    region,
 	}

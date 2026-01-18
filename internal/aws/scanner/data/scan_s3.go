@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -13,7 +14,7 @@ type S3Scanner struct {
 }
 
 func NewS3Scanner(cfg aws.Config) *S3Scanner {
-	return &S3Scanner{client: s3.NewFromConfig(cfg)}
+	return &S3Scanner{client: clients.NewS3(cfg)}
 }
 
 func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {

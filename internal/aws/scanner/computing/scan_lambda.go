@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -14,7 +15,7 @@ type LambdaScanner struct {
 
 func NewLambdaScanner(cfg aws.Config) *LambdaScanner {
 	return &LambdaScanner{
-		client: lambda.NewFromConfig(cfg),
+		client: clients.NewLambda(cfg),
 	}
 }
 

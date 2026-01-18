@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acm"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -13,7 +14,7 @@ type ACMScanner struct {
 }
 
 func NewACMScanner(cfg aws.Config) *ACMScanner {
-	return &ACMScanner{client: acm.NewFromConfig(cfg)}
+	return &ACMScanner{client: clients.NewACM(cfg)}
 }
 
 func (s *ACMScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
@@ -32,18 +33,14 @@ func (s *ACMScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 			CertificateArn: &arn,
 		})
 		if err != nil { continue }
-
-		isCompliant := false
+		tagMap := make(map[string]string)
 		for _, t := range tagOut.Tags {
-			if t.Key != nil && t.Value != nil &&
-				*t.Key == rule.TargetKey && *t.Value == rule.TargetVal {
-				isCompliant = true
-				break
+			if t.Key != nil && t.Value != nil {
+				tagMap[*t.Key] = *t.Value
 			}
 		}
 
-		if !isCompliant {
-
+		if !scanner.IsCompliant(tagMap, rule) {
 			descOut, err := s.client.DescribeCertificate(ctx, &acm.DescribeCertificateInput{CertificateArn: &arn})
 			id := arn
 			if err == nil && descOut.Certificate != nil {

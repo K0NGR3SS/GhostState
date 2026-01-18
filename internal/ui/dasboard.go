@@ -2,12 +2,15 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	ghostAws "github.com/K0NGR3SS/GhostState/internal/aws"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"strings"
 )
 
 const logo = `
@@ -17,7 +20,6 @@ const logo = `
 / /_/ / / / / /_/ (__  ) /_ ___/ / /_/ /_/ / /_/  __/
 \____/_/ /_/\____/____/\__//____/\__/\__,_/\__/\___/ 
 `
-
 const (
 	StateMenu   = 0
 	StateConfig = 1
@@ -38,17 +40,14 @@ var (
 )
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
-	headerStyle  = lipgloss.NewStyle().Background(colorGold).Foreground(colorDark).Bold(true).Padding(0, 1).MarginTop(1).MarginBottom(1)
-	sectionStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).Underline(true).MarginTop(1)
-
-	checkboxStyle = lipgloss.NewStyle().Foreground(colorGray).PaddingLeft(1)
-	selectedStyle = lipgloss.NewStyle().Foreground(colorWhite).Bold(true).PaddingLeft(1)
-
-	ghostStyle = lipgloss.NewStyle().Foreground(colorRed).PaddingLeft(2).SetString("👻 ")
-	cleanStyle = lipgloss.NewStyle().Foreground(colorGreen).PaddingLeft(2).SetString("🛡️ ")
-	inputStyle = lipgloss.NewStyle().Foreground(colorGold)
-	
+	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
+	headerStyle    = lipgloss.NewStyle().Background(colorGold).Foreground(colorDark).Bold(true).Padding(0, 1).MarginTop(1).MarginBottom(1)
+	sectionStyle   = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).Underline(true).MarginTop(1)
+	checkboxStyle  = lipgloss.NewStyle().Foreground(colorGray).PaddingLeft(1)
+	selectedStyle  = lipgloss.NewStyle().Foreground(colorWhite).Bold(true).PaddingLeft(1)
+	ghostStyle     = lipgloss.NewStyle().Foreground(colorRed).PaddingLeft(2).SetString("👻 ")
+	cleanStyle     = lipgloss.NewStyle().Foreground(colorGreen).PaddingLeft(2).SetString("🛡️ ")
+	inputStyle     = lipgloss.NewStyle().Foreground(colorGold)
 	resultCatStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).MarginTop(1).PaddingLeft(1)
 )
 
@@ -61,8 +60,9 @@ type Model struct {
 	focusIdx int
 	results  map[string][]string
 	spinner  spinner.Model
+	startTime time.Time
+	duration  time.Duration
 }
-
 func InitialModel() Model {
 	s := spinner.New()
 	s.Spinner = spinner.Meter
@@ -122,12 +122,6 @@ func (m Model) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
-type StartScanMsg struct {
-	ScanEC2, ScanS3, ScanRDS, ScanElasti, ScanACM, ScanSecGroups, ScanECS, ScanCloudfront, ScanLambda, ScanDynamoDB, ScanVPC bool
-	TargetKey                                                                                                              string
-	TargetVal                                                                                                              string
-}
-
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -155,6 +149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab", "shift+tab", "enter":
 				if m.focusIdx == len(m.inputs)-1 && msg.String() == "enter" {
 					m.state = StateScan
+					m.startTime = time.Now()
 					return m, m.startScanCmd()
 				}
 				m.handleInputFocus(msg.String())
@@ -172,6 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ghostAws.FinishedMsg:
+		m.duration = time.Since(m.startTime)
 		m.state = StateDone
 		return m, nil
 
@@ -186,7 +182,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-
 func (m *Model) handleSelection() {
 	m.selected[m.cursor] = !m.selected[m.cursor]
 	val := m.selected[m.cursor]
@@ -233,20 +228,41 @@ func (m *Model) handleInputFocus(key string) {
 
 func (m Model) startScanCmd() tea.Cmd {
 	return func() tea.Msg {
-		key, val := m.inputs[0].Value(), m.inputs[1].Value()
-		if key == "" {
-			key = "ManagedBy"
-		}
-		if val == "" {
-			val = "Terraform"
+		rawKeys := m.inputs[0].Value()
+		rawVals := m.inputs[1].Value()
+
+		tags := make(map[string]string)
+
+		keys := strings.Split(rawKeys, ",")
+		vals := strings.Split(rawVals, ",")
+
+		for i, k := range keys {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			v := ""
+			if i < len(vals) {
+				v = strings.TrimSpace(vals[i])
+			}
+			tags[k] = v
 		}
 
-		go ghostAws.ScanAll(Program, ghostAws.AuditConfig{
+		if len(tags) == 0 {
+			tags["ManagedBy"] = "Terraform"
+		}
+
+		conf := scanner.AuditConfig{
 			ScanEC2: m.selected[2], ScanECS: m.selected[3], ScanLambda: m.selected[4],
 			ScanS3: m.selected[6], ScanRDS: m.selected[7], ScanDynamoDB: m.selected[8], ScanElasti: m.selected[9],
 			ScanVPC: m.selected[11], ScanCloudfront: m.selected[12], ScanACM: m.selected[13], ScanSecGroups: m.selected[14],
-			TargetKey: key, TargetVal: val,
-		})
+			
+			TargetRule: scanner.AuditRule{
+				Tags: tags,
+			},
+		}
+
+		go ghostAws.ScanAll(Program, conf)
 		return nil
 	}
 }
@@ -261,14 +277,18 @@ func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
 
 func getCategory(res string) string {
 	res = strings.ToLower(res)
-	if strings.Contains(res, "ec2") || strings.Contains(res, "ecs") || strings.Contains(res, "lambda") {
+	isType := func(t string) bool {
+		return strings.Contains(res, "["+strings.ToLower(t))
+	}
+
+	if isType("VPC") || isType("Subnet") || isType("Internet Gateway") || isType("NAT Gateway") || isType("CloudFront") || isType("ACM Certificate") || isType("Security Group") {
+		return "NETWORKING & SECURITY"
+	}
+	if isType("EC2") || isType("ECS") || isType("Lambda") {
 		return "COMPUTING"
 	}
-	if strings.Contains(res, "s3") || strings.Contains(res, "rds") || strings.Contains(res, "dynamodb") || strings.Contains(res, "elasticache") {
+	if isType("S3") || isType("RDS") || isType("DynamoDB") || isType("ElastiCache") {
 		return "DATA & STORAGE"
-	}
-	if strings.Contains(res, "vpc") || strings.Contains(res, "cloudfront") || strings.Contains(res, "acm") || strings.Contains(res, "security group") {
-		return "NETWORKING & SECURITY"
 	}
 	return "OTHER"
 }
@@ -276,7 +296,7 @@ func getCategory(res string) string {
 func (m Model) renderResults() string {
 	s := ""
 	categories := []string{"COMPUTING", "DATA & STORAGE", "NETWORKING & SECURITY", "OTHER"}
-	
+
 	for _, cat := range categories {
 		if items, ok := m.results[cat]; ok && len(items) > 0 {
 			s += resultCatStyle.Render(cat) + "\n"
@@ -323,12 +343,12 @@ func (m Model) View() string {
 	case StateDone:
 		s += headerStyle.Render(" 4. REPORT ") + "\n"
 		s += m.renderResults()
-		
+
 		total := 0
 		for _, v := range m.results {
 			total += len(v)
 		}
-		s += fmt.Sprintf("Found %d ghosts. [Q] Quit", total)
+		s += fmt.Sprintf("Found %d ghosts in %s. [Q] Quit", total, m.duration.Round(time.Millisecond))
 	}
 	return s
 }
