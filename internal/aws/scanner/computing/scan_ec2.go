@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -19,7 +20,8 @@ func NewEC2Scanner(cfg aws.Config) *EC2Scanner {
 }
 
 func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	client := ec2.NewFromConfig(s.baseCfg)
+	client := clients.NewEC2(s.baseCfg) 
+	
 	regions, err := client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{AllRegions: aws.Bool(true)})
 	if err != nil {
 		return nil, fmt.Errorf("listing regions: %w", err)
@@ -39,7 +41,7 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 			regCfg := s.baseCfg.Copy()
 			regCfg.Region = reg
-			regClient := ec2.NewFromConfig(regCfg)
+			regClient := clients.NewEC2(regCfg)
 
 			resp, err := regClient.DescribeInstances(ctx, &ec2.DescribeInstancesInput{})
 			if err != nil { return }

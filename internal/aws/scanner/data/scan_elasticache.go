@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -12,7 +13,7 @@ type ElastiScanner struct {
 }
 
 func NewElastiScanner(cfg aws.Config) *ElastiScanner {
-	return &ElastiScanner{client: elasticache.NewFromConfig(cfg)}
+	return &ElastiScanner{client: clients.NewElastiCache(cfg)}
 }
 
 func (s *ElastiScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {

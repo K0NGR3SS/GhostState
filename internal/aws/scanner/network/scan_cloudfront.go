@@ -1,10 +1,11 @@
-package networking
+package network
 
 import (
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -13,7 +14,7 @@ type CloudFrontScanner struct {
 }
 
 func NewCloudFrontScanner(cfg aws.Config) *CloudFrontScanner {
-	return &CloudFrontScanner{client: cloudfront.NewFromConfig(cfg)}
+	return &CloudFrontScanner{client: clients.NewCloudFront(cfg)}
 }
 
 func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {

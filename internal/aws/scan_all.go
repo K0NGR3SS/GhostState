@@ -2,76 +2,35 @@ package aws
 
 import (
 	"context"
-	"sync"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-func ScanAll(p *tea.Program, conf AuditConfig) {
+func ScanAll(p *tea.Program, conf scanner.AuditConfig) {
+	// 1. Load AWS Config
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		send(p, "Error loading AWS config: "+err.Error())
-		if p != nil {
-			p.Send(FinishedMsg{})
-		}
+		p.Send(FoundMsg(fmt.Sprintf("Error loading AWS config: %v", err)))
+		p.Send(FinishedMsg{})
 		return
 	}
 
-	var wg sync.WaitGroup
-
-	// Computing
-	if conf.ScanEC2 {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanEC2(cfg, p, conf) }()
-	}
-	if conf.ScanECS {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanECS(cfg, p, conf) }()
-	}
-	if conf.ScanLambda {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanLambda(cfg, p, conf) }()
-	}
-
-	// Data
-	if conf.ScanS3 {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanS3(cfg, p, conf) }()
-	}
-	if conf.ScanRDS {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanRDS(cfg, p, conf) }()
-	}
-	if conf.ScanDynamoDB {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanDynamoDB(cfg, p, conf) }()
-	}
-	if conf.ScanElasti {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanElasti(cfg, p, conf) }()
-	}
-
-	// Networking & Security
-	if conf.ScanVPC {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanVPC(cfg, p, conf) }()
-	}
-	if conf.ScanCloudfront {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanCloudfront(cfg, p, conf) }()
-	}
-	if conf.ScanACM {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanACM(cfg, p, conf) }()
-	}
-	if conf.ScanSecGroups {
-		wg.Add(1)
-		go func() { defer wg.Done(); scanSecGroups(cfg, p, conf) }()
-	}
-
-	wg.Wait()
-	if p != nil {
+	provider, err := NewProvider(cfg)
+	if err != nil {
+		p.Send(FoundMsg(fmt.Sprintf("Error initializing provider: %v", err)))
 		p.Send(FinishedMsg{})
+		return
 	}
+	results, err := provider.ScanAll(context.TODO(), conf)
+	if err != nil {
+		p.Send(FoundMsg(fmt.Sprintf("Scan error: %v", err)))
+	}
+	for _, res := range results {
+		msg := fmt.Sprintf("[%s] %s", res.Type, res.ID)
+		p.Send(FoundMsg(msg))
+	}
+	p.Send(FinishedMsg{})
 }

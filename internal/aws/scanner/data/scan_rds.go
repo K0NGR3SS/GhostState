@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/K0NGR3SS/GhostState/internal/aws/clients"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
@@ -12,7 +13,7 @@ type RDSScanner struct {
 }
 
 func NewRDSScanner(cfg aws.Config) *RDSScanner {
-	return &RDSScanner{client: rds.NewFromConfig(cfg)}
+	return &RDSScanner{client: clients.NewRDS(cfg)}
 }
 
 func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
