@@ -1,3 +1,6 @@
 #.gitignore
 .env
 .DS_Store
+*.exe
+ghoststate-mac
+ghoststate-linux
