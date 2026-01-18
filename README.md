@@ -25,18 +25,32 @@ GhostState currently audits the following AWS resources:
 *   **EC2** Instances
 *   **ECS** Clusters
 *   **Lambda** Functions
+*   **EKS** Clusters
+*   **ECR** Repositories
 
 ### Data & Storage
 *   **S3** Buckets
 *   **RDS** Databases
 *   **DynamoDB** Tables
 *   **ElastiCache** Clusters
+*   **EBS** Volumes
 
-### Networking & Security
-*   **VPC Stack** (VPC, Subnets, Internet Gateways, NAT Gateways)
+### Networking
+*   **VPC Stack** VPC, Subnets, Internet Gateways
 *   **CloudFront** Distributions
-*   **ACM** Certificates
+*   **Elastic IPs** Addresses
+*   **Load Balancers** ELB/ALB
+
+### Security & Identity
 *   **Security Groups**
+*   **ACM** Certificates
+*   **IAM** Users
+*   **KMS** Keys
+*   **Secrets Manager** Secrets
+
+### Monitoring
+*   **CloudWatch** Alarms
+
 
 ## Usage
 
