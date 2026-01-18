@@ -10,19 +10,18 @@ import (
 
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/computing"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/data"
+	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/monitoring"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/network"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/security"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
-// Provider holds the AWS configuration
 type Provider struct {
 	cfg       aws.Config
 	accountID string
 	region    string
 }
 
-// NewProvider creates a new AWS provider
 func NewProvider(cfg aws.Config) (*Provider, error) {
 	stsClient := sts.NewFromConfig(cfg)
 	identity, err := stsClient.GetCallerIdentity(context.TODO(), &sts.GetCallerIdentityInput{})
@@ -37,13 +36,11 @@ func NewProvider(cfg aws.Config) (*Provider, error) {
 	}, nil
 }
 
-// ScanAll orchestrates the scanning of all requested services
 func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, error) {
 	var results []scanner.Resource
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// Helper to run a scanner concurrently
 	run := func(s interface {
 		Scan(context.Context, scanner.AuditRule) ([]scanner.Resource, error)
 	}) {
@@ -69,6 +66,14 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(computing.NewLambdaScanner(p.cfg))
 	}
+	if conf.ScanEKS {
+        wg.Add(1)
+        go run(computing.NewEKSScanner(p.cfg))
+    }
+    if conf.ScanECR { 
+        wg.Add(1)
+        go run(computing.NewECRScanner(p.cfg))
+    }
 
 	// --- Data ---
 	if conf.ScanS3 {
@@ -88,6 +93,11 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		go run(data.NewElastiScanner(p.cfg))
 	}
 
+	if conf.ScanEBS {
+		wg.Add(1)
+		go run(data.NewEBSScanner(p.cfg))
+	}
+
 	// --- Network ---
 	if conf.ScanVPC {
 		wg.Add(1)
@@ -97,6 +107,14 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(network.NewCloudFrontScanner(p.cfg))
 	}
+	if conf.ScanEIP {
+        wg.Add(1)
+        go run(network.NewEIPScanner(p.cfg))
+    }
+    if conf.ScanELB {
+        wg.Add(1)
+        go run(network.NewELBScanner(p.cfg))
+    }
 
 	// --- Security ---
 	if conf.ScanACM {
@@ -106,6 +124,26 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 	if conf.ScanSecGroups {
 		wg.Add(1)
 		go run(security.NewSGScanner(p.cfg))
+	}
+
+	if conf.ScanIAM {
+		wg.Add(1)
+		go run(security.NewIAMScanner(p.cfg))
+	}
+
+	if conf.ScanSecrets {
+		wg.Add(1)
+		go run(security.NewSecretsScanner(p.cfg))
+	}
+	if conf.ScanKMS {
+        wg.Add(1)
+        go run(security.NewKMSScanner(p.cfg))
+    }
+
+	// --- Monitoring (NEW) ---
+	if conf.ScanCloudWatch {
+		wg.Add(1)
+		go run(monitoring.NewCloudWatchScanner(p.cfg))
 	}
 
 	wg.Wait()

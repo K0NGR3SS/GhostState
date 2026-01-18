@@ -30,6 +30,15 @@ type AuditConfig struct {
 	ScanVPC       bool
 	ScanECS       bool
 	ScanCloudfront bool
+	ScanEIP  	   bool
+    ScanELB  	   bool
+    ScanECR  	   bool
+    ScanEKS  	   bool
+    ScanKMS  	   bool
+	ScanEBS        bool
+    ScanIAM        bool
+    ScanCloudWatch bool
+    ScanSecrets    bool
 
 	Mode      AuditMode
 	TargetKey string
