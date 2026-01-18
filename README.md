@@ -1,25 +1,46 @@
-# GhostState (v1.1)
+# GhostState (v1.2)
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-GhostState is a CLI tool built in Go for AWS cloud governance. It scans your infrastructure to identify "drift" or "shadow IT" resources that are missing specific governance tags.
+GhostState is a CLI security and governance tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets) and "Risk" resources (security vulnerabilities) in real-time.
 
-It features a robust, hexagonal architecture and a real-time, terminal-based dashboard (TUI) that categorizes resources as **Ghosts** (👻) if they fail compliance checks.
+It features a robust, hexagonal architecture and a terminal-based dashboard (TUI) that provides instant visibility into your cloud posture.
 
-## Features
+## New Features
 
-*   **Interactive TUI:** Beautiful Bubble Tea interface with granular resource selection.
-*   **Multi-Tag Compliance:** Support for complex audit rules. Input comma-separated keys and values (e.g., `ManagedBy,Env` -> `Terraform,Prod`) to enforce multiple tags at once.
-*   **Categorized Reporting:** Results are intelligent grouped by domain (Computing, Data, Networking/Security).
-*   **Performance Metrics:** Tracks and displays exact scan duration.
-*   **Clean Architecture:** Built using the Provider pattern with separated Clients and Scanners for high maintainability.
+GhostState has been upgraded with a powerful **Risk Analysis Engine** and **Safety Checks** to go beyond simple inventory scanning:
+
+*   **Risk Analysis Engine:** Automatically detects critical security flaws such as open SSH ports, public S3 buckets, unencrypted databases, and stale IAM credentials.
+*   **Smart Scan Modes:**
+    *   **ALL:** Displays the full infrastructure inventory.
+    *   **RISK:** Filters purely for **Critical** (💀), **High** (🚨), and **Medium** (⚠️) security issues.
+    *   **GHOST:** Filters for unused or "shadow" resources (e.g., unattached IPs, empty clusters).
+*   **Tag Compliance:** Now enforces governance by filtering resources missing specific tags (e.g., `CohortKey: Cohort`), helping you spot drift immediately.
+*   **Safety Categorization:** Results are visually categorized by risk level, making it easy to prioritize remediation.
+
+## Risk & Safety Checks
+
+GhostState performs the following audits during every scan:
+
+| Service | Risk Check |
+| :--- | :--- |
+| **EC2** | Public IP detection, Stopped instances (Ghost) |
+| **S3** | **Public Access** detection (High Risk) |
+| **IAM** | **Stale Passwords** (>90 days), No Console Login (Ghost) |
+| **Security Groups** | **SSH (22) / RDP (3389)** Open to World (Critical) |
+| **RDS** | **Public Access**, Storage Encryption Disabled |
+| **DynamoDB** | Point-In-Time Recovery (Backups) Disabled |
+| **EBS** | Unencrypted Volumes, Unattached Volumes (Ghost) |
+| **CloudFront** | WAF Disabled, Distribution Disabled (Ghost) |
+| **Lambda** | Deprecated Runtimes (e.g., Python 3.7) |
+| **ELB/ALB** | Internet Facing detection |
 
 ## Supported Services
 
-GhostState currently audits the following AWS resources:
+GhostState audits the following AWS resources:
 
 ### Computing
 *   **EC2** Instances
@@ -36,10 +57,10 @@ GhostState currently audits the following AWS resources:
 *   **EBS** Volumes
 
 ### Networking
-*   **VPC Stack** VPC, Subnets, Internet Gateways
+*   **VPC Stack** (VPC, Subnets, IGW)
 *   **CloudFront** Distributions
-*   **Elastic IPs** Addresses
-*   **Load Balancers** ELB/ALB
+*   **Elastic IPs** (EIP)
+*   **Load Balancers** (ELB/ALB)
 
 ### Security & Identity
 *   **Security Groups**
@@ -50,7 +71,6 @@ GhostState currently audits the following AWS resources:
 
 ### Monitoring
 *   **CloudWatch** Alarms
-
 
 ## Usage
 
