@@ -3,16 +3,18 @@ package scanner
 import "context"
 
 type Resource struct {
-	Type string
-	ID   string
-	ARN  string
-	Tags map[string]string
-	Risk     string
-	RiskInfo string
-	IsGhost   bool
+	
+	Type      string
+	ID        string
+	ARN       string
+	Risk      string
+	RiskInfo  string
 	GhostInfo string
+	Info      string
 
-	Info string
+	Tags      map[string]string
+
+	IsGhost   bool
 }
 
 type AuditRule struct {
@@ -22,16 +24,41 @@ type AuditRule struct {
 	ScanMode  string
 }
 
+// Optimized AuditConfig: Grouped by type to reduce padding waste
 type AuditConfig struct {
-	ScanEC2, ScanS3, ScanRDS, ScanElasti     bool
-	ScanACM, ScanSecGroups, ScanECS          bool
-	ScanCloudfront, ScanLambda, ScanDynamoDB bool
-	ScanVPC                                  bool
-
-	ScanEBS, ScanIAM, ScanSecrets, ScanCloudWatch bool
-	ScanEIP, ScanELB, ScanECR, ScanEKS, ScanKMS   bool
-
+    // Complex types first
 	TargetRule AuditRule
+
+    // Group 1: Computing
+	ScanEC2    bool
+	ScanECS    bool
+	ScanLambda bool
+	ScanEKS    bool
+	ScanECR    bool
+
+    // Group 2: Data
+	ScanS3       bool
+	ScanRDS      bool
+	ScanDynamoDB bool
+	ScanElasti   bool
+	ScanEBS      bool
+
+    // Group 3: Network
+	ScanVPC        bool
+	ScanCloudfront bool
+	ScanEIP        bool
+	ScanELB        bool
+    ScanRoute53    bool
+
+    // Group 4: Security
+	ScanACM        bool
+	ScanSecGroups  bool
+	ScanIAM        bool
+	ScanSecrets    bool
+	ScanKMS        bool
+    ScanCloudTrail bool
+
+	ScanCloudWatch bool
 }
 
 type Scanner interface {

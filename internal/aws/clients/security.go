@@ -3,10 +3,11 @@ package clients
 import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acm"
+	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 )
 
 func NewACM(cfg aws.Config) *acm.Client {
@@ -26,5 +27,9 @@ func NewSecretsManager(cfg aws.Config) *secretsmanager.Client {
 }
 
 func NewKMS(cfg aws.Config) *kms.Client {
-    return kms.NewFromConfig(cfg)
+	return kms.NewFromConfig(cfg)
+}
+
+func NewCloudTrail(cfg aws.Config) *cloudtrail.Client {
+	return cloudtrail.NewFromConfig(cfg)
 }
