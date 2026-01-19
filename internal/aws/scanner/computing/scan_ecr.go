@@ -20,6 +20,7 @@ func (s *ECRScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	var results []scanner.Resource
 
 	p := ecr.NewDescribeRepositoriesPaginator(s.Client, &ecr.DescribeRepositoriesInput{})
+
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
@@ -58,6 +59,13 @@ func (s *ECRScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 			}
 
 			if repo.ImageScanningConfiguration != nil && !repo.ImageScanningConfiguration.ScanOnPush {
+				res.IsGhost = true
+				if res.GhostInfo == "" {
+					res.GhostInfo = "Image Scanning Disabled"
+				} else {
+					res.GhostInfo += ", Image Scanning Disabled"
+				}
+
 				res.Risk = "LOW"
 				res.RiskInfo = "Image Scanning Disabled"
 			}

@@ -1,7 +1,7 @@
 # GhostState (v1.2)
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
+![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -75,7 +75,7 @@ GhostState audits the following AWS resources:
 ## Usage
 
 **Prerequisites**
-*   Go 1.23+
+*   Go 1.25+
 *   Configured AWS Credentials (`~/.aws/credentials` or environment variables)
 
 **Run from Source**
