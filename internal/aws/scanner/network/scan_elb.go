@@ -2,10 +2,10 @@ package network
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
-	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type ELBScanner struct {
@@ -17,36 +17,34 @@ func NewELBScanner(cfg aws.Config) *ELBScanner {
 }
 
 func (s *ELBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, lb := range out.LoadBalancers {
-		risk := "SAFE"
-		info := ""
 
-		// Check if Internet Facing
-		if lb.Scheme == types.LoadBalancerSchemeEnumInternetFacing {
-			risk = "LOW" 
-			info = "Internet Facing"
+	p := elasticloadbalancingv2.NewDescribeLoadBalancersPaginator(s.Client, &elasticloadbalancingv2.DescribeLoadBalancersInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" || risk == "LOW" { continue }
-		}
-		tags := map[string]string{}
-
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *lb.LoadBalancerName,
+		for _, lb := range out.LoadBalancers {
+			res := scanner.Resource{
+				ID:   aws.ToString(lb.LoadBalancerName),
+				ARN:  aws.ToString(lb.LoadBalancerArn),
 				Type: "Load Balancer",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			if lb.Scheme == "internet-facing" {
+				res.Risk = "LOW"
+				res.RiskInfo = "Internet Facing"
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
+
 	return results, nil
 }

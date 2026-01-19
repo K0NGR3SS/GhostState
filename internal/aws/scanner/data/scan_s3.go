@@ -2,9 +2,10 @@ package data
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type S3Scanner struct {
@@ -23,47 +24,47 @@ func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner
 
 	var results []scanner.Resource
 	for _, b := range out.Buckets {
-		risk := "SAFE"
-		info := ""
+		res := scanner.Resource{
+			ID:   aws.ToString(b.Name),
+			Type: "S3 Bucket",
+			Tags: map[string]string{},
+			Risk: "SAFE",
+		}
 
 		pab, err := s.Client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: b.Name})
 		isPublic := false
+
 		if err != nil {
-			isPublic = true 
-			info = "No Block Config Found"
+			isPublic = true
+			res.RiskInfo = "No Block Config Found"
 		} else if pab.PublicAccessBlockConfiguration != nil {
 			conf := pab.PublicAccessBlockConfiguration
-			if (conf.BlockPublicAcls == nil || !*conf.BlockPublicAcls) || 
-			   (conf.BlockPublicPolicy == nil || !*conf.BlockPublicPolicy) || 
-			   (conf.IgnorePublicAcls == nil || !*conf.IgnorePublicAcls) || 
-			   (conf.RestrictPublicBuckets == nil || !*conf.RestrictPublicBuckets) {
+			if (conf.BlockPublicAcls == nil || !*conf.BlockPublicAcls) ||
+				(conf.BlockPublicPolicy == nil || !*conf.BlockPublicPolicy) ||
+				(conf.IgnorePublicAcls == nil || !*conf.IgnorePublicAcls) ||
+				(conf.RestrictPublicBuckets == nil || !*conf.RestrictPublicBuckets) {
 				isPublic = true
-				info = "Public Access Allowed"
+				res.RiskInfo = "Public Access Allowed"
 			}
 		}
 
-		if isPublic { risk = "HIGH" }
-
-		// [FIX] Filter Modes
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" { continue }
+		if isPublic {
+			res.Risk = "HIGH"
 		}
-		// S3 doesn't really have "Ghost" (unused) logic here yet, unless empty.
-		// So Ghost mode just returns all buckets for now? Or skips SAFE ones?
-		// Let's assume Ghost Mode users want to see all buckets to find unused ones manually.
 
-		tags := map[string]string{} 
+		listOut, err := s.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:  b.Name,
+			MaxKeys: aws.Int32(1),
+		})
+		if err == nil && *listOut.KeyCount == 0 {
+			res.IsGhost = true
+			res.GhostInfo = "Empty Bucket"
+		}
 
-		if scanner.MatchesRule(tags, rule) {
-			// [FIX] Clean Type String
-			results = append(results, scanner.Resource{
-				ID:   *b.Name,
-				Type: "S3 Bucket",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+		if scanner.MatchesRule(res.Tags, rule) {
+			results = append(results, res)
 		}
 	}
+
 	return results, nil
 }

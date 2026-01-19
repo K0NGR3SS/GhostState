@@ -3,9 +3,10 @@ package computing
 import (
 	"context"
 	"strings"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type LambdaScanner struct {
@@ -17,38 +18,47 @@ func NewLambdaScanner(cfg aws.Config) *LambdaScanner {
 }
 
 func (s *LambdaScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.ListFunctions(ctx, &lambda.ListFunctionsInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, fn := range out.Functions {
-		risk := "SAFE"
-		info := ""
 
-		rt := string(fn.Runtime)
-		if strings.Contains(rt, "python3.6") || strings.Contains(rt, "python3.7") || 
-		   strings.Contains(rt, "nodejs12") || strings.Contains(rt, "go1.x") {
-			risk = "MEDIUM"
-			info = "Deprecated Runtime: " + rt
+	p := lambda.NewListFunctionsPaginator(s.Client, &lambda.ListFunctionsInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" { continue }
-		}
-
-		tags := map[string]string{}
-
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *fn.FunctionName,
+		for _, fn := range out.Functions {
+			res := scanner.Resource{
+				ID:   aws.ToString(fn.FunctionName),
+				ARN:  aws.ToString(fn.FunctionArn),
 				Type: "Lambda Function",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			if fn.FunctionArn != nil {
+				tout, err := s.Client.ListTags(ctx, &lambda.ListTagsInput{Resource: fn.FunctionArn})
+				if err == nil {
+					for k, v := range tout.Tags {
+						res.Tags[k] = v
+					}
+				}
+			}
+
+			rt := strings.ToLower(string(fn.Runtime))
+			if strings.Contains(rt, "python3.6") ||
+				strings.Contains(rt, "python3.7") ||
+				strings.Contains(rt, "nodejs12") ||
+				strings.Contains(rt, "go1.x") {
+				res.Risk = "MEDIUM"
+				res.RiskInfo = "Deprecated runtime: " + string(fn.Runtime)
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
+
 	return results, nil
 }

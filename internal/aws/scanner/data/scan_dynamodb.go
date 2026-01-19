@@ -2,9 +2,10 @@ package data
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type DynamoDBScanner struct {
@@ -16,45 +17,41 @@ func NewDynamoDBScanner(cfg aws.Config) *DynamoDBScanner {
 }
 
 func (s *DynamoDBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.ListTables(ctx, &dynamodb.ListTablesInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, tableName := range out.TableNames {
-		risk := "SAFE"
-		info := ""
 
-		// Check Backups
-		desc, err := s.Client.DescribeContinuousBackups(ctx, &dynamodb.DescribeContinuousBackupsInput{
-			TableName: &tableName,
-		})
-		
-		if err == nil {
-			cb := desc.ContinuousBackupsDescription
-			if cb.PointInTimeRecoveryDescription == nil || 
-			   cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus == "DISABLED" {
-				risk = "MEDIUM"
-				info = "Backups Disabled"
-			}
+	p := dynamodb.NewListTablesPaginator(s.Client, &dynamodb.ListTablesInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" || risk == "LOW" { continue }
-		}
-
-		tags := map[string]string{}
-
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
+		for _, tableName := range out.TableNames {
+			res := scanner.Resource{
 				ID:   tableName,
 				Type: "DynamoDB Table",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			desc, err := s.Client.DescribeContinuousBackups(ctx, &dynamodb.DescribeContinuousBackupsInput{
+				TableName: &tableName,
 			})
+
+			if err == nil {
+				cb := desc.ContinuousBackupsDescription
+				if cb.PointInTimeRecoveryDescription == nil ||
+					cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus == "DISABLED" {
+					res.Risk = "MEDIUM"
+					res.RiskInfo = "Backups Disabled"
+				}
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
+
 	return results, nil
 }

@@ -3,10 +3,11 @@ package computing
 import (
 	"context"
 	"fmt"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type EC2Scanner struct {
@@ -18,51 +19,46 @@ func NewEC2Scanner(cfg aws.Config) *EC2Scanner {
 }
 
 func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, r := range out.Reservations {
-		for _, i := range r.Instances {
-			risk := "SAFE"
-			info := ""
 
-			if i.State.Name == types.InstanceStateNameStopped {
-				risk = "LOW"
-				info = "Instance Stopped"
-			}
+	p := ec2.NewDescribeInstancesPaginator(s.Client, &ec2.DescribeInstancesInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
 
-			if i.PublicIpAddress != nil && i.State.Name == types.InstanceStateNameRunning {
-				risk = "HIGH"
-				info = fmt.Sprintf("Public IP: %s", *i.PublicIpAddress)
-			}
-
-			if rule.ScanMode == "RISK" {
-				if risk == "SAFE" || risk == "LOW" { continue }
-			}
-			if rule.ScanMode == "GHOST" {
-				if i.State.Name != types.InstanceStateNameStopped { continue }
-			}
-
-			tags := make(map[string]string)
-			for _, t := range i.Tags {
-				if t.Key != nil && t.Value != nil {
-					tags[*t.Key] = *t.Value
-				}
-			}
-
-			if scanner.MatchesRule(tags, rule) {
-				results = append(results, scanner.Resource{
-					ID:   *i.InstanceId,
+		for _, r := range out.Reservations {
+			for _, inst := range r.Instances {
+				res := scanner.Resource{
+					ID:   aws.ToString(inst.InstanceId),
 					Type: "EC2 Instance",
-					Tags: tags,
-					Risk: risk,
-					Info: info,
-				})
+					Tags: map[string]string{},
+					Risk: "SAFE",
+				}
+
+				for _, t := range inst.Tags {
+					if t.Key != nil && t.Value != nil {
+						res.Tags[*t.Key] = *t.Value
+					}
+				}
+
+				if inst.State != nil && inst.State.Name == types.InstanceStateNameStopped {
+					res.IsGhost = true
+					res.GhostInfo = "Instance Stopped"
+				}
+
+				if inst.State != nil && inst.State.Name == types.InstanceStateNameRunning && inst.PublicIpAddress != nil {
+					res.Risk = "HIGH"
+					res.RiskInfo = fmt.Sprintf("Public IP: %s", *inst.PublicIpAddress)
+				}
+
+				if scanner.MatchesRule(res.Tags, rule) {
+					results = append(results, res)
+				}
 			}
 		}
 	}
+
 	return results, nil
 }
