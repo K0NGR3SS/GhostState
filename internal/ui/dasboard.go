@@ -6,6 +6,7 @@ import (
 	"time"
 
 	ghostAws "github.com/K0NGR3SS/GhostState/internal/aws"
+	"github.com/K0NGR3SS/GhostState/internal/report"
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -36,6 +37,7 @@ var (
 	colorGray   = lipgloss.Color("#565F89")
 	colorWhite  = lipgloss.Color("#C0CAF5")
 	colorRed    = lipgloss.Color("#F7768E")
+	colorRedDim = lipgloss.Color("#A54242")
 	colorGreen  = lipgloss.Color("#9ECE6A")
 	colorBlue   = lipgloss.Color("#7AA2F7")
 	colorOrange = lipgloss.Color("#FF9E64")
@@ -52,13 +54,13 @@ var (
 
 	inputStyle     = lipgloss.NewStyle().Foreground(colorGold)
 	resultCatStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).MarginTop(1).PaddingLeft(1)
-
-	styleCritical = lipgloss.NewStyle().Foreground(colorWhite).Background(colorRed).Bold(true).PaddingLeft(2)
+	styleCritical = lipgloss.NewStyle().Foreground(colorWhite).Background(colorRedDim).Bold(true).PaddingLeft(2)
 	styleHigh     = lipgloss.NewStyle().Foreground(colorRed).Bold(true).PaddingLeft(2)
 	styleMedium   = lipgloss.NewStyle().Foreground(colorOrange).PaddingLeft(2)
 	styleLow      = lipgloss.NewStyle().Foreground(colorBlue).PaddingLeft(2)
 	styleSafe     = lipgloss.NewStyle().Foreground(colorGreen).PaddingLeft(2)
 )
+
 
 type Model struct {
 	state     int
@@ -71,7 +73,8 @@ type Model struct {
 	spinner   spinner.Model
 	startTime time.Time
 	duration  time.Duration
-	scanMode  string // ALL, RISK, GHOST
+	scanMode  string
+	statusMsg string
 }
 
 func InitialModel() Model {
@@ -113,14 +116,16 @@ func InitialModel() Model {
 		"  CloudFront Distributions", // 15
 		"  Elastic IPs (EIP)",        // 16
 		"  Load Balancers (ELB)",     // 17
-		"SECURITY & IDENTITY",        // 18
-		"  Security Groups",          // 19
-		"  ACM Certificates",         // 20
-		"  IAM Users",                // 21
-		"  Secrets Manager",          // 22
-		"  KMS Keys",                 // 23
-		"MONITORING",                 // 24
-		"  CloudWatch Alarms",        // 25
+		"  Route53 Hosted Zones",     // 18
+		"SECURITY & IDENTITY",        // 19
+		"  Security Groups",          // 20
+		"  ACM Certificates",         // 21
+		"  IAM Users",                // 22
+		"  Secrets Manager",          // 23
+		"  KMS Keys",                 // 24
+		"  CloudTrail Trails",        // 25
+		"MONITORING",                 // 26
+		"  CloudWatch Alarms",        // 27
 	}
 
 	sel := make(map[int]bool)
@@ -129,15 +134,16 @@ func InitialModel() Model {
 	}
 
 	return Model{
-		state:    StateMenu,
-		choices:  choices,
-		selected: sel,
-		cursor:   0,
-		inputs:   []textinput.Model{tKey, tVal},
-		focusIdx: 0,
-		results:  make(map[string][]scanner.Resource),
-		spinner:  s,
-		scanMode: "ALL",
+		state:     StateMenu,
+		choices:   choices,
+		selected:  sel,
+		cursor:    0,
+		inputs:    []textinput.Model{tKey, tVal},
+		focusIdx:  0,
+		results:   make(map[string][]scanner.Resource),
+		spinner:   s,
+		scanMode:  "ALL",
+		statusMsg: "",
 	}
 }
 
@@ -154,9 +160,8 @@ func includeByMode(mode string, r scanner.Resource) bool {
 	case "RISK":
 		return isRiskFinding(r)
 	case "GHOST":
-		// Requires scanners to set IsGhost=true for ghost findings.
 		return r.IsGhost
-	default: // ALL
+	default:
 		return true
 	}
 }
@@ -197,9 +202,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "tab", "shift+tab", "enter":
 				if m.focusIdx == len(m.inputs)-1 && msg.String() == "enter" {
-					// Reset results per scan to avoid mixing old + new output.
 					m.results = make(map[string][]scanner.Resource)
-
+					m.statusMsg = "" // Clear status
 					m.state = StateScan
 					m.startTime = time.Now()
 					return m, m.startScanCmd()
@@ -207,15 +211,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.handleInputFocus(msg.String())
 			}
 		} else if m.state == StateDone {
-			if msg.String() == "q" {
+			switch msg.String() {
+			case "q":
 				return m, tea.Quit
+			case "s", "S":
+				filename, err := report.GenerateCSV(m.results)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Error saving report: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("Report saved to %s", filename)
+				}
+				return m, nil
 			}
 		}
 
 	case ghostAws.FoundMsg:
 		res := scanner.Resource(msg)
 
-		// Central filtering: ALL/RISK/GHOST.
 		if !includeByMode(m.scanMode, res) {
 			return m, nil
 		}
@@ -259,15 +271,15 @@ func (m *Model) handleSelection() {
 			m.selected[i] = val
 		}
 	case 13: // NETWORKING
-		for i := 14; i <= 17; i++ {
+		for i := 14; i <= 18; i++ {
 			m.selected[i] = val
 		}
-	case 18: // SECURITY
-		for i := 19; i <= 23; i++ {
+	case 19: // SECURITY
+		for i := 20; i <= 25; i++ {
 			m.selected[i] = val
 		}
-	case 24: // MONITORING
-		m.selected[25] = val
+	case 26: // MONITORING
+		m.selected[27] = val
 	}
 }
 
@@ -299,24 +311,21 @@ func (m Model) startScanCmd() tea.Cmd {
 		rawVals := strings.TrimSpace(m.inputs[1].Value())
 
 		conf := scanner.AuditConfig{
-			// Computing
 			ScanEC2: m.selected[2], ScanECS: m.selected[3], ScanLambda: m.selected[4],
 			ScanEKS: m.selected[5], ScanECR: m.selected[6],
 
-			// Data
 			ScanS3: m.selected[8], ScanRDS: m.selected[9], ScanDynamoDB: m.selected[10],
 			ScanElasti: m.selected[11], ScanEBS: m.selected[12],
 
-			// Network
 			ScanVPC: m.selected[14], ScanCloudfront: m.selected[15],
 			ScanEIP: m.selected[16], ScanELB: m.selected[17],
+			ScanRoute53: m.selected[18],
 
-			// Security
-			ScanSecGroups: m.selected[19], ScanACM: m.selected[20],
-			ScanIAM: m.selected[21], ScanSecrets: m.selected[22], ScanKMS: m.selected[23],
+			ScanSecGroups: m.selected[20], ScanACM: m.selected[21],
+			ScanIAM: m.selected[22], ScanSecrets: m.selected[23], ScanKMS: m.selected[24],
+			ScanCloudTrail: m.selected[25],
 
-			// Monitoring
-			ScanCloudWatch: m.selected[25],
+			ScanCloudWatch: m.selected[27],
 
 			TargetRule: scanner.AuditRule{
 				TargetKey: rawKeys,
@@ -342,7 +351,7 @@ func getCategory(resType string) string {
 	resType = strings.ToLower(resType)
 	isType := func(t string) bool { return strings.Contains(resType, strings.ToLower(t)) }
 
-	if isType("vpc") || isType("subnet") || isType("gateway") || isType("cloudfront") || isType("eip") || isType("elastic ip") || isType("load balancer") {
+	if isType("vpc") || isType("subnet") || isType("gateway") || isType("cloudfront") || isType("eip") || isType("elastic ip") || isType("load balancer") || isType("route53") || isType("hosted zone") {
 		return "NETWORKING"
 	}
 	if isType("ec2") || isType("ecs") || isType("lambda") || isType("eks") || isType("ecr") {
@@ -351,7 +360,7 @@ func getCategory(resType string) string {
 	if isType("s3") || isType("rds") || isType("dynamodb") || isType("elasticache") || isType("ebs") {
 		return "DATA & STORAGE"
 	}
-	if isType("security group") || isType("acm") || isType("iam") || isType("secret") || isType("kms") {
+	if isType("security group") || isType("acm") || isType("iam") || isType("secret") || isType("kms") || isType("cloudtrail") {
 		return "SECURITY & IDENTITY"
 	}
 	if isType("cloudwatch") || isType("alarm") {
@@ -391,7 +400,7 @@ func (m Model) renderResults() string {
 		for _, item := range items {
 			cleanType := cleanTypeString(item.Type)
 			line := fmt.Sprintf("[%s] %s", cleanType, item.ID)
-			
+
 			if m.scanMode == "GHOST" {
 				if item.GhostInfo != "" {
 					line += fmt.Sprintf(" (%s)", item.GhostInfo)
@@ -403,11 +412,15 @@ func (m Model) renderResults() string {
 			} else {
 				if item.IsGhost {
 					gi := item.GhostInfo
-					if gi == "" { gi = "Ghost" }
+					if gi == "" {
+						gi = "Ghost"
+					}
 					line += fmt.Sprintf(" (Ghost: %s)", gi)
 				}
 				ri := item.RiskInfo
-				if ri == "" { ri = item.Info }
+				if ri == "" {
+					ri = item.Info
+				}
 				if ri != "" && isRiskFinding(item) {
 					line += fmt.Sprintf(" (Risk: %s)", ri)
 				}
@@ -420,7 +433,6 @@ func (m Model) renderResults() string {
 				prefix = "👻 "
 				styled = styleLow.Render(prefix + line)
 			} else if m.scanMode == "RISK" {
-
 				switch item.Risk {
 				case "CRITICAL":
 					prefix = "💀 "
@@ -450,7 +462,11 @@ func (m Model) renderResults() string {
 					prefix += "⚠️  "
 					styled = styleMedium.Render(prefix + line)
 				case "LOW":
-					if !item.IsGhost { prefix += "👻 " } else { prefix += " " }
+					if !item.IsGhost {
+						prefix += "👻 "
+					} else {
+						prefix += " "
+					}
 					styled = styleLow.Render(prefix + line)
 				case "SAFE":
 					if item.IsGhost {
@@ -493,7 +509,7 @@ func (m Model) View() string {
 				checked = "[x]"
 			}
 			line := fmt.Sprintf("%s %s %s", cursor, checked, choice)
-			if i == 0 || i == 1 || i == 7 || i == 13 || i == 18 || i == 24 {
+			if i == 0 || i == 1 || i == 7 || i == 13 || i == 19 || i == 26 {
 				s += sectionStyle.Render(line) + "\n"
 			} else {
 				s += selectedStyle.Render(line) + "\n"
@@ -513,13 +529,21 @@ func (m Model) View() string {
 
 	case StateDone:
 		s += headerStyle.Render(" 4. REPORT ") + "\n"
-		s += m.renderResults()
 
+		if m.statusMsg != "" {
+			if strings.HasPrefix(m.statusMsg, "Error") {
+				s += styleHigh.Render(m.statusMsg) + "\n\n"
+			} else {
+				s += styleSafe.Render(m.statusMsg) + "\n\n"
+			}
+		}
+
+		s += m.renderResults()
 		total := 0
 		for _, v := range m.results {
 			total += len(v)
 		}
-		s += fmt.Sprintf("Found %d resources in %s. [Q] Quit", total, m.duration.Round(time.Millisecond))
+		s += fmt.Sprintf("Found %d resources in %s. [S] Save CSV [Q] Quit", total, m.duration.Round(time.Millisecond))
 	}
 
 	return s

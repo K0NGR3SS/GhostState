@@ -37,6 +37,7 @@ GhostState performs the following audits during every scan:
 | **CloudFront** | WAF Disabled, Distribution Disabled (Ghost) |
 | **Lambda** | Deprecated Runtimes (e.g., Python 3.7) |
 | **ELB/ALB** | Internet Facing detection |
+| **CloudTrail** | Logging Disabled (Critical), Validation Disabled |
 
 ## Supported Services
 
@@ -61,6 +62,7 @@ GhostState audits the following AWS resources:
 *   **CloudFront** Distributions
 *   **Elastic IPs** (EIP)
 *   **Load Balancers** (ELB/ALB)
+*   **Route53** Hosted Zones
 
 ### Security & Identity
 *   **Security Groups**
@@ -68,6 +70,7 @@ GhostState audits the following AWS resources:
 *   **IAM** Users
 *   **KMS** Keys
 *   **Secrets Manager** Secrets
+*   **CloudTrail** Trails
 
 ### Monitoring
 *   **CloudWatch** Alarms

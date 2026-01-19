@@ -59,7 +59,29 @@ func (s *EKSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 			if err1 == nil && err2 == nil && len(ng.Nodegroups) == 0 && len(fp.FargateProfileNames) == 0 {
 				res.IsGhost = true
-				res.GhostInfo = "No nodegroups/fargate profiles"
+				res.GhostInfo = "No NodeGroups or Fargate Profiles found"
+			}
+
+			vpcConf := desc.Cluster.ResourcesVpcConfig
+			if vpcConf != nil {
+				if vpcConf.EndpointPublicAccess {
+					isOpen := false
+					if len(vpcConf.PublicAccessCidrs) == 0 {
+						isOpen = true
+					} else {
+						for _, cidr := range vpcConf.PublicAccessCidrs {
+							if cidr == "0.0.0.0/0" {
+								isOpen = true
+								break
+							}
+						}
+					}
+
+					if isOpen {
+						res.Risk = "HIGH"
+						res.RiskInfo = "API Endpoint is Public (0.0.0.0/0)"
+					}
+				}
 			}
 
 			if scanner.MatchesRule(res.Tags, rule) {

@@ -85,7 +85,6 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(data.NewRDSScanner(p.cfg))
 	}
-	// [FIXED] Using the correct helper `run` and `p.cfg`
 	if conf.ScanDynamoDB {
 		wg.Add(1)
 		go run(data.NewDynamoDBScanner(p.cfg))
@@ -116,6 +115,10 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		wg.Add(1)
 		go run(network.NewELBScanner(p.cfg))
 	}
+	if conf.ScanRoute53 {
+		wg.Add(1)
+		go run(network.NewRoute53Scanner(p.cfg))
+	}
 
 	// --- Security ---
 	if conf.ScanACM {
@@ -137,6 +140,11 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 	if conf.ScanKMS {
 		wg.Add(1)
 		go run(security.NewKMSScanner(p.cfg))
+	}
+
+	if conf.ScanCloudTrail {
+		wg.Add(1)
+		go run(security.NewTrailScanner(p.cfg))
 	}
 
 	// --- Monitoring ---
