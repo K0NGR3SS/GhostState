@@ -2,9 +2,11 @@ package computing
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 )
 
 type ECSScanner struct {
@@ -16,52 +18,62 @@ func NewECSScanner(cfg aws.Config) *ECSScanner {
 }
 
 func (s *ECSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.ListClusters(ctx, &ecs.ListClustersInput{})
-	if err != nil {
-		return nil, err
+	var clusterArns []string
+
+	p := ecs.NewListClustersPaginator(s.Client, &ecs.ListClustersInput{})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		clusterArns = append(clusterArns, page.ClusterArns...)
 	}
-	if len(out.ClusterArns) == 0 {
+
+	if len(clusterArns) == 0 {
 		return nil, nil
 	}
 
-	desc, err := s.Client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
-		Clusters: out.ClusterArns,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, c := range desc.Clusters {
-		risk := "SAFE"
-		info := ""
 
-		if c.RegisteredContainerInstancesCount == 0 && c.RunningTasksCount == 0 {
-			risk = "LOW"
-			info = "Empty Cluster (No Instances/Tasks)"
+	for i := 0; i < len(clusterArns); i += 100 {
+		end := i + 100
+		if end > len(clusterArns) {
+			end = len(clusterArns)
 		}
 
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" || risk == "LOW" { continue }
-		}
-		if rule.ScanMode == "GHOST" {
-			if risk == "SAFE" { continue }
-		}
-
-		tags := make(map[string]string)
-		for _, t := range c.Tags {
-			if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
+		desc, err := s.Client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
+			Clusters: clusterArns[i:end],
+			Include:  []ecstypes.ClusterField{ecstypes.ClusterFieldTags},
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *c.ClusterName,
+		for _, c := range desc.Clusters {
+			res := scanner.Resource{
+				ID:   aws.ToString(c.ClusterName),
+				ARN:  aws.ToString(c.ClusterArn),
 				Type: "ECS Cluster",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			for _, t := range c.Tags {
+				if t.Key != nil && t.Value != nil {
+					res.Tags[*t.Key] = *t.Value
+				}
+			}
+
+			if c.RegisteredContainerInstancesCount == 0 && c.RunningTasksCount == 0 {
+				res.IsGhost = true
+				res.GhostInfo = "Empty cluster (no instances/tasks)"
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
+
 	return results, nil
 }

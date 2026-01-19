@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type EBSScanner struct {
@@ -15,48 +15,49 @@ type EBSScanner struct {
 }
 
 func NewEBSScanner(cfg aws.Config) *EBSScanner {
-    return &EBSScanner{Client: ec2.NewFromConfig(cfg)}
+	return &EBSScanner{Client: ec2.NewFromConfig(cfg)}
 }
 
 func (s *EBSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	input := &ec2.DescribeVolumesInput{
-		Filters: []types.Filter{
-			{
-				Name:   aws.String("status"),
-				Values: []string{"available"},
-			},
-		},
-	}
-
-	out, err := s.Client.DescribeVolumes(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, v := range out.Volumes {
-		size := int32(0)
-		if v.Size != nil {
-			size = *v.Size
-		}
-        id := "unknown"
-        if v.VolumeId != nil { id = *v.VolumeId }
 
-		results = append(results, scanner.Resource{
-			ID:   fmt.Sprintf("%s (%d GB)", id, size),
-			Type: "👻 [EBS Volume (Unattached)]",
-			Tags: convertTagsEC2(v.Tags),
-		})
+	p := ec2.NewDescribeVolumesPaginator(s.Client, &ec2.DescribeVolumesInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, v := range out.Volumes {
+			id := aws.ToString(v.VolumeId)
+			size := int32(0)
+			if v.Size != nil {
+				size = *v.Size
+			}
+
+			res := scanner.Resource{
+				ID:   fmt.Sprintf("%s (%d GB)", id, size),
+				Type: "EBS Volume",
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			for _, t := range v.Tags {
+				if t.Key != nil && t.Value != nil {
+					res.Tags[*t.Key] = *t.Value
+				}
+			}
+
+			if v.State == types.VolumeStateAvailable {
+				res.IsGhost = true
+				res.GhostInfo = "Unattached Volume"
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
+		}
 	}
+
 	return results, nil
-}
-
-func convertTagsEC2(tags []types.Tag) map[string]string {
-	m := make(map[string]string)
-	for _, t := range tags {
-		if t.Key != nil && t.Value != nil {
-			m[*t.Key] = *t.Value
-		}
-	}
-	return m
 }

@@ -2,9 +2,10 @@ package network
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type CloudFrontScanner struct {
@@ -16,44 +17,43 @@ func NewCloudFrontScanner(cfg aws.Config) *CloudFrontScanner {
 }
 
 func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.ListDistributions(ctx, &cloudfront.ListDistributionsInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	if out.DistributionList != nil {
+
+	p := cloudfront.NewListDistributionsPaginator(s.Client, &cloudfront.ListDistributionsInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if out.DistributionList == nil {
+			continue
+		}
+
 		for _, d := range out.DistributionList.Items {
-			risk := "SAFE"
-			info := ""
+			res := scanner.Resource{
+				ID:   aws.ToString(d.DomainName),
+				ARN:  aws.ToString(d.ARN),
+				Type: "CloudFront Dist",
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
 
 			if d.WebACLId == nil || *d.WebACLId == "" {
-				risk = "MEDIUM"
-				info = "No WAF Attached"
-			} else if !*d.Enabled {
-				risk = "LOW"
-				info = "Distribution Disabled"
+				res.Risk = "MEDIUM"
+				res.RiskInfo = "No WAF Attached"
 			}
 
-			if rule.ScanMode == "RISK" {
-				if risk == "SAFE" || risk == "LOW" { continue }
-			}
-			if rule.ScanMode == "GHOST" {
-				if *d.Enabled { continue }
+			if !*d.Enabled {
+				res.IsGhost = true
+				res.GhostInfo = "Distribution Disabled"
 			}
 
-			tags := map[string]string{}
-
-			if scanner.MatchesRule(tags, rule) {
-				results = append(results, scanner.Resource{
-					ID:   *d.DomainName,
-					Type: "CloudFront Dist",
-					Tags: tags,
-					Risk: risk,
-					Info: info,
-				})
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
 			}
 		}
 	}
+
 	return results, nil
 }

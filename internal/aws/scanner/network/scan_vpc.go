@@ -2,9 +2,10 @@ package network
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type VPCScanner struct {
@@ -23,38 +24,30 @@ func (s *VPCScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 	var results []scanner.Resource
 	for _, vpc := range out.Vpcs {
-		risk := "SAFE"
-		info := ""
-
-		if vpc.IsDefault != nil && *vpc.IsDefault {
-			risk = "LOW"
-			info = "Default VPC"
+		res := scanner.Resource{
+			ID:   aws.ToString(vpc.VpcId),
+			Type: "VPC",
+			Tags: map[string]string{},
+			Risk: "SAFE",
 		}
 
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" || risk == "LOW" { continue }
-		}
-
-		if rule.ScanMode == "GHOST" {
-			if risk == "SAFE" { continue }
-		}
-
-		tags := make(map[string]string)
 		for _, t := range vpc.Tags {
 			if t.Key != nil && t.Value != nil {
-				tags[*t.Key] = *t.Value
+				res.Tags[*t.Key] = *t.Value
 			}
 		}
+		if vpc.IsDefault != nil && *vpc.IsDefault {
+			res.IsGhost = true
+			res.GhostInfo = "Default VPC (Should not be used)"
 
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *vpc.VpcId,
-				Type: "VPC",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+			res.Risk = "LOW"
+			res.RiskInfo = "Default VPC (Public Subnets)"
+		}
+
+		if scanner.MatchesRule(res.Tags, rule) {
+			results = append(results, res)
 		}
 	}
+
 	return results, nil
 }

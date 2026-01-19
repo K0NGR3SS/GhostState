@@ -2,9 +2,10 @@ package network
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type EIPScanner struct {
@@ -22,35 +23,29 @@ func (s *EIPScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	}
 
 	var results []scanner.Resource
-	for _, addr := range out.Addresses {
-		risk := "SAFE"
-		info := ""
-		if addr.AssociationId == nil {
-			risk = "LOW"
-			info = "Unused IP (Wasting Cost)"
+	for _, a := range out.Addresses {
+		res := scanner.Resource{
+			ID:   aws.ToString(a.PublicIp),
+			Type: "Elastic IP",
+			Tags: map[string]string{},
+			Risk: "SAFE",
 		}
 
-		if rule.ScanMode == "RISK" {
-			continue 
-		}
-		if rule.ScanMode == "GHOST" {
-			if risk == "SAFE" { continue }
-		}
-
-		tags := make(map[string]string)
-		for _, t := range addr.Tags {
-			if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
+		for _, t := range a.Tags {
+			if t.Key != nil && t.Value != nil {
+				res.Tags[*t.Key] = *t.Value
+			}
 		}
 
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *addr.PublicIp,
-				Type: "Elastic IP",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
+		if a.AssociationId == nil {
+			res.IsGhost = true
+			res.GhostInfo = "Unassociated EIP"
+		}
+
+		if scanner.MatchesRule(res.Tags, rule) {
+			results = append(results, res)
 		}
 	}
+
 	return results, nil
 }

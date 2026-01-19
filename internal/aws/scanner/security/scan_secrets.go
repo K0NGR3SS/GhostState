@@ -3,47 +3,58 @@ package security
 import (
 	"context"
 	"time"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type SecretsScanner struct {
-	client *secretsmanager.Client
+	Client *secretsmanager.Client
 }
 
 func NewSecretsScanner(cfg aws.Config) *SecretsScanner {
-	return &SecretsScanner{client: secretsmanager.NewFromConfig(cfg)}
+	return &SecretsScanner{Client: secretsmanager.NewFromConfig(cfg)}
 }
 
 func (s *SecretsScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{})
-	if err != nil {
-		return nil, err
-	}
-	var res []scanner.Resource
-	for _, secret := range out.SecretList {
+	var results []scanner.Resource
 
-		isGhost := false
-		if secret.LastAccessedDate == nil {
-			isGhost = true
-		} else if time.Since(*secret.LastAccessedDate) > 90*24*time.Hour {
-			isGhost = true
+	p := secretsmanager.NewListSecretsPaginator(s.Client, &secretsmanager.ListSecretsInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
 
-		if isGhost {
-			tags := make(map[string]string)
+		for _, secret := range out.SecretList {
+			res := scanner.Resource{
+				ID:   aws.ToString(secret.Name),
+				ARN:  aws.ToString(secret.ARN),
+				Type: "Secret",
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
 			for _, t := range secret.Tags {
-				if t.Key != nil && t.Value != nil { tags[*t.Key] = *t.Value }
+				if t.Key != nil && t.Value != nil {
+					res.Tags[*t.Key] = *t.Value
+				}
 			}
-			if scanner.MatchesRule(tags, rule) {
-				res = append(res, scanner.Resource{
-					ID:   *secret.Name,
-					Type: "👻 [Secret]",
-					Tags: tags,
-				})
+			
+			if secret.LastAccessedDate == nil {
+				res.IsGhost = true
+				res.GhostInfo = "Never Accessed"
+			} else if time.Since(*secret.LastAccessedDate) > 90*24*time.Hour {
+				res.IsGhost = true
+				res.GhostInfo = "Unused > 90 Days"
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
 			}
 		}
 	}
-	return res, nil
+
+	return results, nil
 }

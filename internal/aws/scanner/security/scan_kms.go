@@ -2,42 +2,59 @@ package security
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type KMSScanner struct {
-	client *kms.Client
+	Client *kms.Client
 }
 
 func NewKMSScanner(cfg aws.Config) *KMSScanner {
-	return &KMSScanner{client: kms.NewFromConfig(cfg)}
+	return &KMSScanner{Client: kms.NewFromConfig(cfg)}
 }
 
 func (s *KMSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
+	var results []scanner.Resource
 
-	out, err := s.client.ListKeys(ctx, &kms.ListKeysInput{})
-	if err != nil {
-		return nil, err
-	}
-
-	var res []scanner.Resource
-	for _, k := range out.Keys {
-		desc, err := s.client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: k.KeyId})
+	p := kms.NewListKeysPaginator(s.Client, &kms.ListKeysInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		
-		meta := desc.KeyMetadata
 
-		if meta.KeyManager == "CUSTOMER" && meta.KeyState == "Enabled" {
-			res = append(res, scanner.Resource{
-				ID:   *meta.KeyId,
-				Type: "👻 [KMS Key (Customer)]",
-				Tags: nil, 
-			})
+		for _, k := range out.Keys {
+			res := scanner.Resource{
+				ID:   aws.ToString(k.KeyId),
+				ARN:  aws.ToString(k.KeyArn),
+				Type: "KMS Key",
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			desc, err := s.Client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: k.KeyId})
+			if err == nil && desc.KeyMetadata != nil {
+				meta := desc.KeyMetadata
+
+				if meta.KeyState == "PendingDeletion" {
+					res.IsGhost = true
+					res.GhostInfo = "Key Pending Deletion"
+				}
+
+				if meta.KeyManager == "CUSTOMER" && meta.KeyState == "Enabled" {
+					res.IsGhost = true
+					res.GhostInfo = "Customer Managed Key (Review Usage)"
+				}
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
-	return res, nil
+
+	return results, nil
 }

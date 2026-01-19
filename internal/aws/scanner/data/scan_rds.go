@@ -2,9 +2,10 @@ package data
 
 import (
 	"context"
+
+	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
-	"github.com/K0NGR3SS/GhostState/internal/scanner"
 )
 
 type RDSScanner struct {
@@ -16,41 +17,49 @@ func NewRDSScanner(cfg aws.Config) *RDSScanner {
 }
 
 func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, db := range out.DBInstances {
-		risk := "SAFE"
-		info := ""
 
-		if db.PubliclyAccessible != nil && *db.PubliclyAccessible {
-			risk = "HIGH"
-			info = "Publicly Accessible"
-		} else {
-			if db.StorageEncrypted == nil || !*db.StorageEncrypted {
-				risk = "MEDIUM"
-				info = "Unencrypted Storage"
+	p := rds.NewDescribeDBInstancesPaginator(s.Client, &rds.DescribeDBInstancesInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, db := range out.DBInstances {
+			res := scanner.Resource{
+				ID:   aws.ToString(db.DBInstanceIdentifier),
+				Type: "RDS Instance",
+				Tags: map[string]string{},
+				Risk: "SAFE",
+			}
+
+			if db.DBInstanceArn != nil {
+				tout, err := s.Client.ListTagsForResource(ctx, &rds.ListTagsForResourceInput{
+					ResourceName: db.DBInstanceArn,
+				})
+				if err == nil {
+					for _, t := range tout.TagList {
+						if t.Key != nil && t.Value != nil {
+							res.Tags[*t.Key] = *t.Value
+						}
+					}
+				}
+			}
+
+			if db.PubliclyAccessible != nil && *db.PubliclyAccessible {
+				res.Risk = "HIGH"
+				res.RiskInfo = "Publicly Accessible"
+			} else if db.StorageEncrypted == nil || !*db.StorageEncrypted {
+				res.Risk = "MEDIUM"
+				res.RiskInfo = "Unencrypted Storage"
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
 			}
 		}
-
-		if rule.ScanMode == "RISK" {
-			if risk == "SAFE" || risk == "LOW" { continue }
-		}
-
-		tags := map[string]string{}
-
-		if scanner.MatchesRule(tags, rule) {
-			results = append(results, scanner.Resource{
-				ID:   *db.DBInstanceIdentifier,
-				Type: "RDS Instance",
-				Tags: tags,
-				Risk: risk,
-				Info: info,
-			})
-		}
 	}
+
 	return results, nil
 }

@@ -1,6 +1,6 @@
 module github.com/K0NGR3SS/GhostState
 
-go 1.25.6
+go 1.25
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
