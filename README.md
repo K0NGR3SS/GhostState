@@ -5,21 +5,27 @@
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-GhostState is a CLI security and governance tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets) and "Risk" resources (security vulnerabilities) in real-time.
+> **Last Updated:** January 20, 2026
+
+GhostState is an interactive CLI security and governance tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets) and "Risk" resources (security vulnerabilities) in real-time.
 
 It features a robust, hexagonal architecture and a terminal-based dashboard (TUI) that provides instant visibility into your cloud posture.
 
-## New Features
-
-GhostState has been upgraded with a powerful **Risk Analysis Engine** and **Safety Checks** to go beyond simple inventory scanning:
-
-*   **Risk Analysis Engine:** Automatically detects critical security flaws such as open SSH ports, public S3 buckets, unencrypted databases, and stale IAM credentials.
+### Interactive Dashboard (TUI)
+*   **Live Navigation:** Navigate through audit results using arrow keys (`↑`, `↓`) and switch views with `Tab`.
+*   **Drill-Down Inspector:** Press `Enter` on any resource to open a **Detail Modal**, viewing raw tags, full ARNs, and specific risk explanations without leaving the terminal.
 *   **Smart Scan Modes:**
     *   **ALL:** Displays the full infrastructure inventory.
     *   **RISK:** Filters purely for **Critical** (💀), **High** (🚨), and **Medium** (⚠️) security issues.
     *   **GHOST:** Filters for unused or "shadow" resources (e.g., unattached IPs, empty clusters).
-*   **Tag Compliance:** Now enforces governance by filtering resources missing specific tags (e.g., `ManagedBy: Terraform`), helping you spot drift immediately.
-*   **Safety Categorization:** Results are visually categorized by risk level, making it easy to prioritize remediation.
+
+### Security & Governance
+*   **Risk Analysis Engine:** Automatically detects critical security flaws such as open SSH ports, public S3 buckets, unencrypted databases, and stale IAM credentials.
+*   **Tag Compliance:** Enforces governance by filtering resources missing specific tags (e.g., `ManagedBy: Terraform`), helping you spot drift immediately.
+*   **Safety Categorization:** Results are visually categorized by risk level using clear indicators (💀, 🚨, ⚠️, 👻, 🛡️).
+
+### Reporting
+*   **CSV Export:** Instantly export the full audit results to a CSV file for compliance documentation by pressing `S`.
 
 ## Risk & Safety Checks
 
@@ -80,6 +86,11 @@ GhostState audits the following AWS resources:
 **Prerequisites**
 *   Go 1.25+
 *   Configured AWS Credentials (`~/.aws/credentials` or environment variables)
+
+**Future Improvements**
+*   Support of multiple cloud providers (GCP, Azure)
+*   Cost estimation and optimization suggestions
+*   Improve the scanner speed
 
 **Run from Source**
 
