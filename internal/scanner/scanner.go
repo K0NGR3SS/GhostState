@@ -3,7 +3,6 @@ package scanner
 import "context"
 
 type Resource struct {
-	
 	Type      string
 	ID        string
 	ARN       string
@@ -12,9 +11,10 @@ type Resource struct {
 	GhostInfo string
 	Info      string
 
-	Tags      map[string]string
+	Tags map[string]string
 
-	IsGhost   bool
+	IsGhost     bool
+	MonthlyCost float64``
 }
 
 type AuditRule struct {
@@ -26,37 +26,37 @@ type AuditRule struct {
 
 // Optimized AuditConfig: Grouped by type to reduce padding waste
 type AuditConfig struct {
-    // Complex types first
+	// Complex types first
 	TargetRule AuditRule
 
-    // Group 1: Computing
+	// Group 1: Computing
 	ScanEC2    bool
 	ScanECS    bool
 	ScanLambda bool
 	ScanEKS    bool
 	ScanECR    bool
 
-    // Group 2: Data
+	// Group 2: Data
 	ScanS3       bool
 	ScanRDS      bool
 	ScanDynamoDB bool
 	ScanElasti   bool
 	ScanEBS      bool
 
-    // Group 3: Network
+	// Group 3: Network
 	ScanVPC        bool
 	ScanCloudfront bool
 	ScanEIP        bool
 	ScanELB        bool
-    ScanRoute53    bool
+	ScanRoute53    bool
 
-    // Group 4: Security
+	// Group 4: Security
 	ScanACM        bool
 	ScanSecGroups  bool
 	ScanIAM        bool
 	ScanSecrets    bool
 	ScanKMS        bool
-    ScanCloudTrail bool
+	ScanCloudTrail bool
 
 	ScanCloudWatch bool
 }

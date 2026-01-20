@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// --- CONSTANTS & STYLES ---
 
 const logo = `
    ________               __  _____ __        __
@@ -29,6 +32,11 @@ const (
 	StateDone   = 3
 )
 
+const (
+	ViewReport = 0
+	ViewStats  = 1
+)
+
 var Program *tea.Program
 
 var (
@@ -41,40 +49,64 @@ var (
 	colorGreen  = lipgloss.Color("#9ECE6A")
 	colorBlue   = lipgloss.Color("#7AA2F7")
 	colorOrange = lipgloss.Color("#FF9E64")
+	colorBlack  = lipgloss.Color("#000000")
 )
 
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
 	headerStyle  = lipgloss.NewStyle().Background(colorGold).Foreground(colorDark).Bold(true).Padding(0, 1).MarginTop(1).MarginBottom(1)
 	sectionStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).Underline(true).MarginTop(1)
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Bold(true).
-			PaddingLeft(1)
+	selectedStyle = lipgloss.NewStyle().Foreground(colorWhite).Bold(true).PaddingLeft(1)
 
 	inputStyle     = lipgloss.NewStyle().Foreground(colorGold)
 	resultCatStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).MarginTop(1).PaddingLeft(1)
+
 	styleCritical = lipgloss.NewStyle().Foreground(colorWhite).Background(colorRedDim).Bold(true).PaddingLeft(2)
 	styleHigh     = lipgloss.NewStyle().Foreground(colorRed).Bold(true).PaddingLeft(2)
 	styleMedium   = lipgloss.NewStyle().Foreground(colorOrange).PaddingLeft(2)
 	styleLow      = lipgloss.NewStyle().Foreground(colorBlue).PaddingLeft(2)
 	styleSafe     = lipgloss.NewStyle().Foreground(colorGreen).PaddingLeft(2)
+
+	// [FIX] Increased Width from 60 to 80 to prevent tag wrapping
+	modalStyle = lipgloss.NewStyle().
+			Width(80).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorGold).
+			Padding(1, 2).
+			Background(colorDark)
+
+	modalTitleStyle = lipgloss.NewStyle().
+			Foreground(colorGold).
+			Bold(true).
+			Underline(true).
+			MarginBottom(1)
 )
 
-
 type Model struct {
-	state     int
-	choices   []string
-	selected  map[int]bool
-	cursor    int
-	inputs    []textinput.Model
-	focusIdx  int
-	results   map[string][]scanner.Resource
+	state    int
+	choices  []string
+	selected map[int]bool
+	cursor   int
+
+	inputs   []textinput.Model
+	focusIdx int
+
+	results map[string][]scanner.Resource
+
 	spinner   spinner.Model
 	startTime time.Time
 	duration  time.Duration
 	scanMode  string
 	statusMsg string
+
+	resultList     []scanner.Resource
+	resultCursor   int
+	resultViewMode int
+
+	showModal bool
+	modalItem scanner.Resource
+
+	totalCost float64
 }
 
 func InitialModel() Model {
@@ -98,34 +130,34 @@ func InitialModel() Model {
 	tVal.TextStyle = inputStyle
 
 	choices := []string{
-		"ALL SERVICES",               // 0
-		"COMPUTING",                  // 1
-		"  EC2 Instances",            // 2
-		"  ECS Clusters",             // 3
-		"  Lambda Functions",         // 4
-		"  EKS Clusters (K8s)",       // 5
-		"  ECR Repositories",         // 6
-		"DATA & STORAGE",             // 7
-		"  S3 Buckets",               // 8
-		"  RDS Databases",            // 9
-		"  DynamoDB Tables",          // 10
-		"  ElastiCache Clusters",     // 11
-		"  EBS Volumes",              // 12
-		"NETWORKING",                 // 13
-		"  VPC Stack (VPC/Subnets)",  // 14
-		"  CloudFront Distributions", // 15
-		"  Elastic IPs (EIP)",        // 16
-		"  Load Balancers (ELB)",     // 17
-		"  Route53 Hosted Zones",     // 18
-		"SECURITY & IDENTITY",        // 19
-		"  Security Groups",          // 20
-		"  ACM Certificates",         // 21
-		"  IAM Users",                // 22
-		"  Secrets Manager",          // 23
-		"  KMS Keys",                 // 24
-		"  CloudTrail Trails",        // 25
-		"MONITORING",                 // 26
-		"  CloudWatch Alarms",        // 27
+		"ALL SERVICES",
+		"COMPUTING",
+		"  EC2 Instances",
+		"  ECS Clusters",
+		"  Lambda Functions",
+		"  EKS Clusters (K8s)",
+		"  ECR Repositories",
+		"DATA & STORAGE",
+		"  S3 Buckets",
+		"  RDS Databases",
+		"  DynamoDB Tables",
+		"  ElastiCache Clusters",
+		"  EBS Volumes",
+		"NETWORKING",
+		"  VPC Stack (VPC/Subnets)",
+		"  CloudFront Distributions",
+		"  Elastic IPs (EIP)",
+		"  Load Balancers (ELB)",
+		"  Route53 Hosted Zones",
+		"SECURITY & IDENTITY",
+		"  Security Groups",
+		"  ACM Certificates",
+		"  IAM Users",
+		"  Secrets Manager",
+		"  KMS Keys",
+		"  CloudTrail Trails",
+		"MONITORING",
+		"  CloudWatch Alarms",
 	}
 
 	sel := make(map[int]bool)
@@ -134,16 +166,18 @@ func InitialModel() Model {
 	}
 
 	return Model{
-		state:     StateMenu,
-		choices:   choices,
-		selected:  sel,
-		cursor:    0,
-		inputs:    []textinput.Model{tKey, tVal},
-		focusIdx:  0,
-		results:   make(map[string][]scanner.Resource),
-		spinner:   s,
-		scanMode:  "ALL",
-		statusMsg: "",
+		state:          StateMenu,
+		choices:        choices,
+		selected:       sel,
+		cursor:         0,
+		inputs:         []textinput.Model{tKey, tVal},
+		focusIdx:       0,
+		results:        make(map[string][]scanner.Resource),
+		spinner:        s,
+		scanMode:       "ALL",
+		statusMsg:      "",
+		resultCursor:   0,
+		resultViewMode: ViewReport,
 	}
 }
 
@@ -171,6 +205,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+
+		if m.showModal {
+			if msg.String() == "esc" || msg.String() == "enter" {
+				m.showModal = false
+			}
+			return m, nil
 		}
 
 		if m.state == StateMenu {
@@ -203,7 +244,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "tab", "shift+tab", "enter":
 				if m.focusIdx == len(m.inputs)-1 && msg.String() == "enter" {
 					m.results = make(map[string][]scanner.Resource)
-					m.statusMsg = "" // Clear status
+					m.resultList = []scanner.Resource{}
+					m.totalCost = 0
+					m.statusMsg = ""
+					m.resultCursor = 0
+					m.resultViewMode = ViewReport
 					m.state = StateScan
 					m.startTime = time.Now()
 					return m, m.startScanCmd()
@@ -222,18 +267,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.statusMsg = fmt.Sprintf("Report saved to %s", filename)
 				}
 				return m, nil
+			case "tab":
+				if m.resultViewMode == ViewReport {
+					m.resultViewMode = ViewStats
+				} else {
+					m.resultViewMode = ViewReport
+				}
+			case "up", "k":
+				if m.resultViewMode == ViewReport && m.resultCursor > 0 {
+					m.resultCursor--
+				}
+			case "down", "j":
+				if m.resultViewMode == ViewReport && m.resultCursor < len(m.resultList)-1 {
+					m.resultCursor++
+				}
+			case "enter":
+				if m.resultViewMode == ViewReport && len(m.resultList) > 0 {
+					m.showModal = true
+					m.modalItem = m.resultList[m.resultCursor]
+				}
 			}
 		}
 
 	case ghostAws.FoundMsg:
 		res := scanner.Resource(msg)
-
 		if !includeByMode(m.scanMode, res) {
 			return m, nil
 		}
 
 		cat := getCategory(res.Type)
 		m.results[cat] = append(m.results[cat], res)
+		m.resultList = append(m.resultList, res)
+
+		if res.IsGhost {
+			m.totalCost += res.MonthlyCost
+		}
+
 		return m, nil
 
 	case ghostAws.FinishedMsg:
@@ -253,32 +322,114 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func scoreRisk(risk string) int {
+	switch risk {
+	case "CRITICAL":
+		return 4
+	case "HIGH":
+		return 3
+	case "MEDIUM":
+		return 2
+	case "LOW":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func riskEmoji(r scanner.Resource) string {
+	switch r.Risk {
+	case "CRITICAL":
+		return "💀"
+	case "HIGH":
+		return "🚨"
+	case "MEDIUM":
+		return "⚠️"
+	case "LOW":
+		return "🔹"
+	case "SAFE":
+		if r.IsGhost {
+			return "👻"
+		}
+		return "🛡️"
+	default:
+		if r.IsGhost {
+			return "👻"
+		}
+		return "•"
+	}
+}
+
+func styleFor(r scanner.Resource) lipgloss.Style {
+	switch r.Risk {
+	case "CRITICAL":
+		return styleCritical
+	case "HIGH":
+		return styleHigh
+	case "MEDIUM":
+		return styleMedium
+	case "SAFE":
+		if r.IsGhost {
+			return styleLow
+		}
+		return styleSafe
+	default:
+		if r.IsGhost {
+			return styleLow
+		}
+		return styleLow
+	}
+}
+
+func categoryOrder() []string {
+	return []string{
+		"COMPUTING",
+		"DATA & STORAGE",
+		"NETWORKING",
+		"SECURITY & IDENTITY",
+		"MONITORING",
+		"ERRORS",
+		"OTHER",
+	}
+}
+
+func renderLegend() string {
+	parts := []string{
+		styleCritical.Render("💀 CRITICAL"),
+		styleHigh.Render("🚨 HIGH"),
+		styleMedium.Render("⚠️  MEDIUM"),
+		styleLow.Render("👻 GHOST/LOW"),
+		styleSafe.Render("🛡️ SAFE"),
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...) + "\n\n"
+}
+
 func (m *Model) handleSelection() {
 	m.selected[m.cursor] = !m.selected[m.cursor]
 	val := m.selected[m.cursor]
 
 	switch m.cursor {
-	case 0: // ALL
+	case 0:
 		for i := range m.choices {
 			m.selected[i] = val
 		}
-	case 1: // COMPUTING
+	case 1:
 		for i := 2; i <= 6; i++ {
 			m.selected[i] = val
 		}
-	case 7: // DATA
+	case 7:
 		for i := 8; i <= 12; i++ {
 			m.selected[i] = val
 		}
-	case 13: // NETWORKING
+	case 13:
 		for i := 14; i <= 18; i++ {
 			m.selected[i] = val
 		}
-	case 19: // SECURITY
+	case 19:
 		for i := 20; i <= 25; i++ {
 			m.selected[i] = val
 		}
-	case 26: // MONITORING
+	case 26:
 		m.selected[27] = val
 	}
 }
@@ -318,8 +469,7 @@ func (m Model) startScanCmd() tea.Cmd {
 			ScanElasti: m.selected[11], ScanEBS: m.selected[12],
 
 			ScanVPC: m.selected[14], ScanCloudfront: m.selected[15],
-			ScanEIP: m.selected[16], ScanELB: m.selected[17],
-			ScanRoute53: m.selected[18],
+			ScanEIP: m.selected[16], ScanELB: m.selected[17], ScanRoute53: m.selected[18],
 
 			ScanSecGroups: m.selected[20], ScanACM: m.selected[21],
 			ScanIAM: m.selected[22], ScanSecrets: m.selected[23], ScanKMS: m.selected[24],
@@ -384,115 +534,159 @@ func cleanTypeString(t string) string {
 	return strings.TrimSpace(t)
 }
 
-func (m Model) renderResults() string {
-	var sb strings.Builder
-	categories := []string{"COMPUTING", "DATA & STORAGE", "NETWORKING", "SECURITY & IDENTITY", "MONITORING", "ERRORS", "OTHER"}
+func (m Model) renderModal() string {
+	r := m.modalItem
+	s := modalTitleStyle.Render("RESOURCE DETAILS") + "\n\n"
 
-	for _, cat := range categories {
-		items, ok := m.results[cat]
-		if !ok || len(items) == 0 {
+	s += fmt.Sprintf("ID:   %s\n", r.ID)
+	s += fmt.Sprintf("Type: %s\n", r.Type)
+	s += fmt.Sprintf("ARN:  %s\n", r.ARN)
+	s += "\n"
+
+	if r.Risk != "" && r.Risk != "SAFE" {
+		s += styleHigh.Render(fmt.Sprintf("RISK: %s", r.Risk)) + "\n"
+		if r.RiskInfo != "" {
+			s += fmt.Sprintf("Info: %s\n", r.RiskInfo)
+		}
+	} else {
+		s += styleSafe.Render("RISK: SAFE") + "\n"
+	}
+	s += "\n"
+
+	if r.IsGhost {
+		s += styleMedium.Render("GHOST: YES") + "\n"
+		if r.GhostInfo != "" {
+			s += fmt.Sprintf("Why:  %s\n", r.GhostInfo)
+		}
+		s += fmt.Sprintf("Cost: $%.2f/mo\n", r.MonthlyCost)
+	} else {
+		s += styleLow.Render("GHOST: NO") + "\n"
+	}
+	s += "\n"
+
+	s += "Tags:\n"
+	keys := make([]string, 0, len(r.Tags))
+	for k := range r.Tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		s += fmt.Sprintf(" - %s: %s\n", k, r.Tags[k])
+	}
+
+	s += "\n" + lipgloss.NewStyle().Foreground(colorGray).Render("[ESC] Close")
+	
+	return lipgloss.Place(100, 24, lipgloss.Center, lipgloss.Center, modalStyle.Render(s))
+}
+
+func (m Model) renderInteractiveList() string {
+	var sb strings.Builder
+
+	tabHeader := lipgloss.NewStyle().Foreground(colorGray).Render("[TAB: Switch View]")
+	if m.resultViewMode == ViewReport {
+		sb.WriteString(lipgloss.NewStyle().Background(colorBlue).Foreground(colorBlack).Bold(true).Render(" REPORT ") + "  " + tabHeader + "  STATS\n\n")
+	} else {
+		sb.WriteString(" REPORT  " + tabHeader + "  " + lipgloss.NewStyle().Background(colorBlue).Foreground(colorBlack).Bold(true).Render(" STATS ") + "\n\n")
+	}
+
+	if m.resultViewMode == ViewStats {
+		sb.WriteString(fmt.Sprintf("Total Resources: %d\n", len(m.resultList)))
+		sb.WriteString(fmt.Sprintf("Total Ghost Savings (placeholder): $%.2f/mo\n", m.totalCost))
+		return sb.String()
+	}
+
+	sb.WriteString(renderLegend())
+
+	grouped := make(map[string][]scanner.Resource)
+	for _, r := range m.resultList {
+		cat := getCategory(r.Type)
+		grouped[cat] = append(grouped[cat], r)
+	}
+
+	type idxRef struct {
+		cat string
+		i   int
+	}
+	var indexMap []idxRef
+
+	for _, cat := range categoryOrder() {
+		items := grouped[cat]
+		if len(items) == 0 {
 			continue
 		}
 
-		sb.WriteString(resultCatStyle.Render(cat))
-		sb.WriteString("\n")
+		sort.SliceStable(items, func(i, j int) bool {
+			ri := scoreRisk(items[i].Risk)
+			rj := scoreRisk(items[j].Risk)
+			if ri != rj {
+				return ri > rj
+			}
+			if items[i].IsGhost != items[j].IsGhost {
+				return items[i].IsGhost
+			}
+			return items[i].ID < items[j].ID
+		})
 
-		for _, item := range items {
+		sb.WriteString(resultCatStyle.Render(cat) + "\n")
+
+		for i, item := range items {
+			indexMap = append(indexMap, idxRef{cat: cat, i: i})
+			globalIdx := len(indexMap) - 1
+
+			cursor := " "
+			if globalIdx == m.resultCursor {
+				cursor = ">"
+			}
+
+			emoji := riskEmoji(item)
 			cleanType := cleanTypeString(item.Type)
-			line := fmt.Sprintf("[%s] %s", cleanType, item.ID)
 
-			if m.scanMode == "GHOST" {
-				if item.GhostInfo != "" {
-					line += fmt.Sprintf(" (%s)", item.GhostInfo)
+			extra := ""
+			if m.scanMode == "ALL" {
+				if item.Risk != "" && item.Risk != "SAFE" {
+					if item.RiskInfo != "" {
+						extra = fmt.Sprintf(" (%s: %s)", item.Risk, item.RiskInfo)
+					} else {
+						extra = fmt.Sprintf(" (%s)", item.Risk)
+					}
+				} else if item.IsGhost {
+					if item.GhostInfo != "" {
+						extra = fmt.Sprintf(" (Ghost: %s)", item.GhostInfo)
+					} else {
+						extra = " (Ghost)"
+					}
 				}
 			} else if m.scanMode == "RISK" {
 				if item.RiskInfo != "" {
-					line += fmt.Sprintf(" (%s)", item.RiskInfo)
+					extra = fmt.Sprintf(" (%s)", item.RiskInfo)
+				} else if item.Risk != "" && item.Risk != "SAFE" {
+					extra = fmt.Sprintf(" (%s)", item.Risk)
 				}
-			} else {
-				if item.IsGhost {
-					gi := item.GhostInfo
-					if gi == "" {
-						gi = "Ghost"
-					}
-					line += fmt.Sprintf(" (Ghost: %s)", gi)
-				}
-				ri := item.RiskInfo
-				if ri == "" {
-					ri = item.Info
-				}
-				if ri != "" && isRiskFinding(item) {
-					line += fmt.Sprintf(" (Risk: %s)", ri)
+			} else if m.scanMode == "GHOST" {
+				if item.GhostInfo != "" {
+					extra = fmt.Sprintf(" (%s)", item.GhostInfo)
 				}
 			}
 
-			prefix := ""
-			var styled string
-
-			if m.scanMode == "GHOST" {
-				prefix = "👻 "
-				styled = styleLow.Render(prefix + line)
-			} else if m.scanMode == "RISK" {
-				switch item.Risk {
-				case "CRITICAL":
-					prefix = "💀 "
-					styled = styleCritical.Render(prefix + line)
-				case "HIGH":
-					prefix = "🚨 "
-					styled = styleHigh.Render(prefix + line)
-				case "MEDIUM":
-					prefix = "⚠️  "
-					styled = styleMedium.Render(prefix + line)
-				default:
-					prefix = "⚠️  "
-					styled = styleLow.Render(prefix + line)
-				}
-			} else {
-				if item.IsGhost {
-					prefix += "👻"
-				}
-				switch item.Risk {
-				case "CRITICAL":
-					prefix += "💀 "
-					styled = styleCritical.Render(prefix + line)
-				case "HIGH":
-					prefix += "🚨 "
-					styled = styleHigh.Render(prefix + line)
-				case "MEDIUM":
-					prefix += "⚠️  "
-					styled = styleMedium.Render(prefix + line)
-				case "LOW":
-					if !item.IsGhost {
-						prefix += "👻 "
-					} else {
-						prefix += " "
-					}
-					styled = styleLow.Render(prefix + line)
-				case "SAFE":
-					if item.IsGhost {
-						prefix += " "
-						styled = styleLow.Render(prefix + line)
-					} else {
-						prefix += "🛡️ "
-						styled = styleSafe.Render(prefix + line)
-					}
-				default:
-					prefix += "👻 "
-					styled = styleLow.Render(prefix + line)
-				}
-			}
-
-			sb.WriteString(styled)
-			sb.WriteString("\n")
+			line := fmt.Sprintf("%s %s [%s] %s%s", cursor, emoji, cleanType, item.ID, extra)
+			sb.WriteString(styleFor(item).Render(line) + "\n")
 		}
 
 		sb.WriteString("\n")
+	}
+
+	if len(indexMap) == 0 {
+		sb.WriteString(styleLow.Render("No results found for this scan mode.") + "\n")
 	}
 
 	return sb.String()
 }
 
 func (m Model) View() string {
+	if m.showModal {
+		return m.renderModal()
+	}
+
 	s := lipgloss.NewStyle().Foreground(colorGold).Render(logo) + "\n"
 	s += titleStyle.Render("GHOSTSTATE") + "\n"
 
@@ -525,25 +719,21 @@ func (m Model) View() string {
 
 	case StateScan:
 		s += headerStyle.Render(" 3. SCANNING... ") + "\n" + m.spinner.View() + "\n"
-		s += m.renderResults()
 
 	case StateDone:
-		s += headerStyle.Render(" 4. REPORT ") + "\n"
+		s += m.renderInteractiveList()
 
 		if m.statusMsg != "" {
 			if strings.HasPrefix(m.statusMsg, "Error") {
-				s += styleHigh.Render(m.statusMsg) + "\n\n"
+				s += "\n" + styleHigh.Render(m.statusMsg) + "\n"
 			} else {
-				s += styleSafe.Render(m.statusMsg) + "\n\n"
+				s += "\n" + styleSafe.Render(m.statusMsg) + "\n"
 			}
 		}
 
-		s += m.renderResults()
-		total := 0
-		for _, v := range m.results {
-			total += len(v)
-		}
-		s += fmt.Sprintf("Found %d resources in %s. [S] Save CSV [Q] Quit", total, m.duration.Round(time.Millisecond))
+		total := len(m.resultList)
+		s += fmt.Sprintf("\nFound %d resources in %s.\n", total, m.duration.Round(time.Millisecond))
+		s += "[Up/Down] Navigate  [Enter] Details  [S] Save CSV  [Tab] Stats  [Q] Quit"
 	}
 
 	return s
