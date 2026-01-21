@@ -15,8 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// --- CONSTANTS & STYLES ---
-
 const logo = `
    ________               __  _____ __        __
   / ____/ /_  ____  _____/ /_/ ___// /_____ _/ /____
@@ -67,7 +65,6 @@ var (
 	styleLow      = lipgloss.NewStyle().Foreground(colorBlue).PaddingLeft(2)
 	styleSafe     = lipgloss.NewStyle().Foreground(colorGreen).PaddingLeft(2)
 
-	// [FIX] Increased Width from 60 to 80 to prevent tag wrapping
 	modalStyle = lipgloss.NewStyle().
 			Width(80).
 			Border(lipgloss.RoundedBorder()).
@@ -283,8 +280,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "enter":
 				if m.resultViewMode == ViewReport && len(m.resultList) > 0 {
-					m.showModal = true
-					m.modalItem = m.resultList[m.resultCursor]
+					sorted := m.getSortedItems()
+					if m.resultCursor < len(sorted) {
+						m.modalItem = sorted[m.resultCursor]
+						m.showModal = true
+					}
 				}
 			}
 		}
@@ -402,6 +402,32 @@ func renderLegend() string {
 		styleSafe.Render("🛡️ SAFE"),
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...) + "\n\n"
+}
+
+func (m Model) getSortedItems() []scanner.Resource {
+	grouped := make(map[string][]scanner.Resource)
+	for _, r := range m.resultList {
+		cat := getCategory(r.Type)
+		grouped[cat] = append(grouped[cat], r)
+	}
+
+	var sorted []scanner.Resource
+	for _, cat := range categoryOrder() {
+		items := grouped[cat]
+		sort.SliceStable(items, func(i, j int) bool {
+			ri := scoreRisk(items[i].Risk)
+			rj := scoreRisk(items[j].Risk)
+			if ri != rj {
+				return ri > rj
+			}
+			if items[i].IsGhost != items[j].IsGhost {
+				return items[i].IsGhost
+			}
+			return items[i].ID < items[j].ID
+		})
+		sorted = append(sorted, items...)
+	}
+	return sorted
 }
 
 func (m *Model) handleSelection() {
@@ -575,7 +601,6 @@ func (m Model) renderModal() string {
 	}
 
 	s += "\n" + lipgloss.NewStyle().Foreground(colorGray).Render("[ESC] Close")
-	
 	return lipgloss.Place(100, 24, lipgloss.Center, lipgloss.Center, modalStyle.Render(s))
 }
 
@@ -597,85 +622,56 @@ func (m Model) renderInteractiveList() string {
 
 	sb.WriteString(renderLegend())
 
-	grouped := make(map[string][]scanner.Resource)
-	for _, r := range m.resultList {
-		cat := getCategory(r.Type)
-		grouped[cat] = append(grouped[cat], r)
-	}
+	sortedItems := m.getSortedItems()
+	currentCat := ""
 
-	type idxRef struct {
-		cat string
-		i   int
-	}
-	var indexMap []idxRef
-
-	for _, cat := range categoryOrder() {
-		items := grouped[cat]
-		if len(items) == 0 {
-			continue
+	for i, item := range sortedItems {
+		cat := getCategory(item.Type)
+		if cat != currentCat {
+			sb.WriteString(resultCatStyle.Render(cat) + "\n")
+			currentCat = cat
 		}
 
-		sort.SliceStable(items, func(i, j int) bool {
-			ri := scoreRisk(items[i].Risk)
-			rj := scoreRisk(items[j].Risk)
-			if ri != rj {
-				return ri > rj
-			}
-			if items[i].IsGhost != items[j].IsGhost {
-				return items[i].IsGhost
-			}
-			return items[i].ID < items[j].ID
-		})
+		cursor := " "
+		if i == m.resultCursor {
+			cursor = ">"
+		}
 
-		sb.WriteString(resultCatStyle.Render(cat) + "\n")
+		emoji := riskEmoji(item)
+		cleanType := cleanTypeString(item.Type)
 
-		for i, item := range items {
-			indexMap = append(indexMap, idxRef{cat: cat, i: i})
-			globalIdx := len(indexMap) - 1
-
-			cursor := " "
-			if globalIdx == m.resultCursor {
-				cursor = ">"
-			}
-
-			emoji := riskEmoji(item)
-			cleanType := cleanTypeString(item.Type)
-
-			extra := ""
-			if m.scanMode == "ALL" {
-				if item.Risk != "" && item.Risk != "SAFE" {
-					if item.RiskInfo != "" {
-						extra = fmt.Sprintf(" (%s: %s)", item.Risk, item.RiskInfo)
-					} else {
-						extra = fmt.Sprintf(" (%s)", item.Risk)
-					}
-				} else if item.IsGhost {
-					if item.GhostInfo != "" {
-						extra = fmt.Sprintf(" (Ghost: %s)", item.GhostInfo)
-					} else {
-						extra = " (Ghost)"
-					}
-				}
-			} else if m.scanMode == "RISK" {
+		extra := ""
+		if m.scanMode == "ALL" {
+			if item.Risk != "" && item.Risk != "SAFE" {
 				if item.RiskInfo != "" {
-					extra = fmt.Sprintf(" (%s)", item.RiskInfo)
-				} else if item.Risk != "" && item.Risk != "SAFE" {
+					extra = fmt.Sprintf(" (%s: %s)", item.Risk, item.RiskInfo)
+				} else {
 					extra = fmt.Sprintf(" (%s)", item.Risk)
 				}
-			} else if m.scanMode == "GHOST" {
+			} else if item.IsGhost {
 				if item.GhostInfo != "" {
-					extra = fmt.Sprintf(" (%s)", item.GhostInfo)
+					extra = fmt.Sprintf(" (Ghost: %s)", item.GhostInfo)
+				} else {
+					extra = " (Ghost)"
 				}
 			}
-
-			line := fmt.Sprintf("%s %s [%s] %s%s", cursor, emoji, cleanType, item.ID, extra)
-			sb.WriteString(styleFor(item).Render(line) + "\n")
+		} else if m.scanMode == "RISK" {
+			if item.RiskInfo != "" {
+				extra = fmt.Sprintf(" (%s)", item.RiskInfo)
+			} else if item.Risk != "" && item.Risk != "SAFE" {
+				extra = fmt.Sprintf(" (%s)", item.Risk)
+			}
+		} else if m.scanMode == "GHOST" {
+			if item.GhostInfo != "" {
+				extra = fmt.Sprintf(" (%s)", item.GhostInfo)
+			}
 		}
 
-		sb.WriteString("\n")
+		line := fmt.Sprintf("%s %s [%s] %s%s", cursor, emoji, cleanType, item.ID, extra)
+		sb.WriteString(styleFor(item).Render(line) + "\n")
 	}
 
-	if len(indexMap) == 0 {
+	if len(sortedItems) == 0 {
 		sb.WriteString(styleLow.Render("No results found for this scan mode.") + "\n")
 	}
 
