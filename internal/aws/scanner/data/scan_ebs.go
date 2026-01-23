@@ -2,7 +2,6 @@ package data
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,17 +28,19 @@ func (s *EBSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 		}
 
 		for _, v := range out.Volumes {
-			id := aws.ToString(v.VolumeId)
-			size := int32(0)
+			size := float64(0)
 			if v.Size != nil {
-				size = *v.Size
+				size = float64(*v.Size)
 			}
 
 			res := scanner.Resource{
-				ID:   fmt.Sprintf("%s (%d GB)", id, size),
-				Type: "EBS Volume",
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				ID:      aws.ToString(v.VolumeId),
+				Service: "EBS Volume",
+				Type:    string(v.VolumeType),
+				Size:    size,
+				Status:  string(v.State),
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			for _, t := range v.Tags {

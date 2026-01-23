@@ -30,11 +30,18 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 		for _, r := range out.Reservations {
 			for _, inst := range r.Instances {
+				stateName := "unknown"
+				if inst.State != nil {
+					stateName = string(inst.State.Name)
+				}
+
 				res := scanner.Resource{
-					ID:   aws.ToString(inst.InstanceId),
-					Type: "EC2 Instance",
-					Tags: map[string]string{},
-					Risk: "SAFE",
+					ID:      aws.ToString(inst.InstanceId),
+					Service: "EC2",
+					Type:    string(inst.InstanceType), // Specific Type (e.g. t3.micro) for Pricing
+					Status:  stateName,
+					Tags:    map[string]string{},
+					Risk:    "SAFE",
 				}
 
 				for _, t := range inst.Tags {
@@ -45,14 +52,13 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 				if inst.State != nil && inst.State.Name == types.InstanceStateNameStopped {
 					res.IsGhost = true
-					res.GhostInfo = "Instance Stopped"
+					res.GhostInfo = fmt.Sprintf("Stopped (%s)", string(inst.InstanceType))
 				}
 
 				if inst.State != nil && inst.State.Name == types.InstanceStateNameRunning && inst.PublicIpAddress != nil {
 					res.Risk = "HIGH"
 					res.RiskInfo = fmt.Sprintf("Public IP: %s", *inst.PublicIpAddress)
 				}
-
 				if scanner.MatchesRule(res.Tags, rule) {
 					results = append(results, res)
 				}
