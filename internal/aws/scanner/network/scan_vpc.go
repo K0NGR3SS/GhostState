@@ -26,7 +26,9 @@ func (s *VPCScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	for _, vpc := range out.Vpcs {
 		res := scanner.Resource{
 			ID:   aws.ToString(vpc.VpcId),
+			Service: "VPC",
 			Type: "VPC",
+			Status:  "Available",
 			Tags: map[string]string{},
 			Risk: "SAFE",
 		}
