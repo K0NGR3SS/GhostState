@@ -37,20 +37,18 @@ func NewProvider(cfg aws.Config) (*Provider, error) {
 }
 
 func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, error) {
-	var results []scanner.Resource
-	var mu sync.Mutex
+	resultsChan := make(chan scanner.Resource, 1000)
 	var wg sync.WaitGroup
 
-	// Helper closure to run scans safely
 	run := func(s interface {
 		Scan(context.Context, scanner.AuditRule) ([]scanner.Resource, error)
 	}) {
 		defer wg.Done()
 		res, err := s.Scan(ctx, conf.TargetRule)
 		if err == nil {
-			mu.Lock()
-			results = append(results, res...)
-			mu.Unlock()
+			for _, r := range res {
+				resultsChan <- r
+			}
 		}
 	}
 
@@ -153,6 +151,19 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		go run(monitoring.NewCloudWatchScanner(p.cfg))
 	}
 
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	var results []scanner.Resource
+	for res := range resultsChan {
+		if res.MonthlyCost == 0 {
+			res.MonthlyCost = EstimateCost(res.Service, res.Type, res.Size)
+		}
+
+		results = append(results, res)
+	}
+
 	return results, nil
 }

@@ -27,11 +27,19 @@ func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 		}
 
 		for _, db := range out.DBInstances {
+			size := float64(0)
+			if db.AllocatedStorage != nil {
+				size = float64(*db.AllocatedStorage)
+			}
+
 			res := scanner.Resource{
-				ID:   aws.ToString(db.DBInstanceIdentifier),
-				Type: "RDS Instance",
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				ID:      aws.ToString(db.DBInstanceIdentifier),
+				Service: "RDS",
+				Type:    aws.ToString(db.DBInstanceClass),
+				Size:    size,
+				Status:  aws.ToString(db.DBInstanceStatus),
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			if db.DBInstanceArn != nil {

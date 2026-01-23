@@ -6,6 +6,12 @@ type Resource struct {
 	Type      string
 	ID        string
 	ARN       string
+	
+	// NEW FIELDS FOR PRICING
+	Service   string 
+	Status    string
+	Size      float64
+	
 	Risk      string
 	RiskInfo  string
 	GhostInfo string
@@ -14,7 +20,7 @@ type Resource struct {
 	Tags map[string]string
 
 	IsGhost     bool
-	MonthlyCost float64``
+	MonthlyCost float64
 }
 
 type AuditRule struct {
@@ -24,33 +30,27 @@ type AuditRule struct {
 	ScanMode  string
 }
 
-// Optimized AuditConfig: Grouped by type to reduce padding waste
 type AuditConfig struct {
-	// Complex types first
 	TargetRule AuditRule
 
-	// Group 1: Computing
 	ScanEC2    bool
 	ScanECS    bool
 	ScanLambda bool
 	ScanEKS    bool
 	ScanECR    bool
 
-	// Group 2: Data
 	ScanS3       bool
 	ScanRDS      bool
 	ScanDynamoDB bool
 	ScanElasti   bool
 	ScanEBS      bool
 
-	// Group 3: Network
 	ScanVPC        bool
 	ScanCloudfront bool
 	ScanEIP        bool
 	ScanELB        bool
 	ScanRoute53    bool
 
-	// Group 4: Security
 	ScanACM        bool
 	ScanSecGroups  bool
 	ScanIAM        bool
