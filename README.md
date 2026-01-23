@@ -12,10 +12,10 @@ GhostState is an interactive CLI security, governance, and cost-analysis tool fo
 It features a robust, hexagonal architecture and a terminal-based dashboard (TUI) that provides instant visibility into your cloud posture.
 
 ## New Features for v1.2
-*   ** Cost Estimation Engine:** Real-time monthly cost estimates for resources (EC2, RDS, EBS) directly in the dashboard.
-*   ** Cost Drill-Down View:** A new specialized view (switched via `Tab`) to sort resources by price and identify top spenders.
-*   ** Smart TUI Navigation:** Improved scrolling, viewport handling for large datasets, and global "Back" navigation (`Esc`).
-*   ** Enhanced Reporting:** CSV exports now include detailed columns for **Service**, **Status**, **Size**, and **Monthly Cost**.
+*   Cost Estimation Engine:** Real-time monthly cost estimates for resources (EC2, RDS, EBS) directly in the dashboard.
+*   Cost Drill-Down View:** A new specialized view (switched via `Tab`) to sort resources by price and identify top spenders.
+*   Smart TUI Navigation:** Improved scrolling, viewport handling for large datasets, and global "Back" navigation (`Esc`).
+*   Enhanced Reporting:** CSV exports now include detailed columns for **Service**, **Status**, **Size**, and **Monthly Cost**.
 
 ---
 
