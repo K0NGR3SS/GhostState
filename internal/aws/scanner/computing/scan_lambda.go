@@ -31,6 +31,8 @@ func (s *LambdaScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sca
 			res := scanner.Resource{
 				ID:   aws.ToString(fn.FunctionName),
 				ARN:  aws.ToString(fn.FunctionArn),
+				Service: "Lambda",
+				Status: "Active",
 				Type: "Lambda Function",
 				Tags: map[string]string{},
 				Risk: "SAFE",

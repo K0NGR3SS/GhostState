@@ -20,7 +20,21 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	headers := []string{"Category", "Type", "ID/Name", "IsGhost", "GhostInfo", "Risk", "RiskInfo", "Tags"}
+	headers := []string{
+		"Category", 
+		"Service", 
+		"Type", 
+		"ID/Name", 
+		"Status", 
+		"Size", 
+		"MonthlyCost ($)", 
+		"IsGhost", 
+		"GhostInfo", 
+		"Risk", 
+		"RiskInfo", 
+		"Tags",
+	}
+	
 	if err := writer.Write(headers); err != nil {
 		return "", err
 	}
@@ -39,8 +53,12 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 
 			row := []string{
 				category,
+				r.Service,
 				r.Type,
 				r.ID,
+				r.Status,
+				fmt.Sprintf("%.2f", r.Size),
+				fmt.Sprintf("%.2f", r.MonthlyCost),
 				isGhost,
 				r.GhostInfo,
 				r.Risk,

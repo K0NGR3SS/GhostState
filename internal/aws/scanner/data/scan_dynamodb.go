@@ -29,6 +29,8 @@ func (s *DynamoDBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]s
 		for _, tableName := range out.TableNames {
 			res := scanner.Resource{
 				ID:   tableName,
+				Service: "DynamoDB",
+				Status: "Active",
 				Type: "DynamoDB Table",
 				Tags: map[string]string{},
 				Risk: "SAFE",

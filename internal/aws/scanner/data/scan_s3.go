@@ -26,7 +26,9 @@ func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner
 	for _, b := range out.Buckets {
 		res := scanner.Resource{
 			ID:   aws.ToString(b.Name),
+			Service: "S3",
 			Type: "S3 Bucket",
+			Status:  "Active",  
 			Tags: map[string]string{},
 			Risk: "SAFE",
 		}

@@ -34,6 +34,8 @@ func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([
 			res := scanner.Resource{
 				ID:   aws.ToString(d.DomainName),
 				ARN:  aws.ToString(d.ARN),
+				Service: "CloudFront",
+				Status: aws.ToString(d.Status),
 				Type: "CloudFront Dist",
 				Tags: map[string]string{},
 				Risk: "SAFE",

@@ -30,7 +30,9 @@ func (s *ELBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 			res := scanner.Resource{
 				ID:   aws.ToString(lb.LoadBalancerName),
 				ARN:  aws.ToString(lb.LoadBalancerArn),
+				Service: "ELB",
 				Type: "Load Balancer",
+				Status: string(lb.State.Code),
 				Tags: map[string]string{},
 				Risk: "SAFE",
 			}
