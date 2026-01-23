@@ -5,15 +5,23 @@
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Last Updated:** January 20, 2026
+> **Last Updated:** January 23, 2026
 
-GhostState is an interactive CLI security and governance tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets) and "Risk" resources (security vulnerabilities) in real-time.
+GhostState is an interactive CLI security, governance, and cost-analysis tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets), "Risk" resources (security vulnerabilities), and estimates your monthly cloud spend in real-time.
 
 It features a robust, hexagonal architecture and a terminal-based dashboard (TUI) that provides instant visibility into your cloud posture.
 
+## New Features for v1.2
+*   ** Cost Estimation Engine:** Real-time monthly cost estimates for resources (EC2, RDS, EBS) directly in the dashboard.
+*   ** Cost Drill-Down View:** A new specialized view (switched via `Tab`) to sort resources by price and identify top spenders.
+*   ** Smart TUI Navigation:** Improved scrolling, viewport handling for large datasets, and global "Back" navigation (`Esc`).
+*   ** Enhanced Reporting:** CSV exports now include detailed columns for **Service**, **Status**, **Size**, and **Monthly Cost**.
+
+---
+
 ### Interactive Dashboard (TUI)
-*   **Live Navigation:** Navigate through audit results using arrow keys (`↑`, `↓`) and switch views with `Tab`.
-*   **Drill-Down Inspector:** Press `Enter` on any resource to open a **Detail Modal**, viewing raw tags, full ARNs, and specific risk explanations without leaving the terminal.
+*   **Live Navigation:** Navigate through audit results using arrow keys (`↑`, `↓`), cycle views (Report/Stats/Cost) with `Tab`, and go back with `Esc`.
+*   **Drill-Down Inspector:** Press `Enter` on any resource to open a **Detail Modal**, viewing raw tags, full ARNs, cost breakdowns, and risk explanations without leaving the terminal.
 *   **Smart Scan Modes:**
     *   **ALL:** Displays the full infrastructure inventory.
     *   **RISK:** Filters purely for **Critical** (💀), **High** (🚨), and **Medium** (⚠️) security issues.
@@ -89,8 +97,8 @@ GhostState audits the following AWS resources:
 
 **Future Improvements**
 *   Support of multiple cloud providers (GCP, Azure)
-*   Cost estimation and optimization suggestions
-*   Improve the scanner speed
+*   Automated remediation (Fix it button)
+*   Improve scanner parallelization
 
 **Run from Source**
 
