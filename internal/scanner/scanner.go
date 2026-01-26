@@ -7,10 +7,11 @@ type Resource struct {
 	ID        string
 	ARN       string
 	
-	// NEW FIELDS FOR PRICING
+	// Fields for pricing and metadata
 	Service   string 
 	Status    string
 	Size      float64
+	Region    string  // NEW: Track which region resource is in
 	
 	Risk      string
 	RiskInfo  string
@@ -32,6 +33,7 @@ type AuditRule struct {
 
 type AuditConfig struct {
 	TargetRule AuditRule
+	Regions    []string  // List of regions to scan (empty = current region only)
 
 	ScanEC2    bool
 	ScanECS    bool

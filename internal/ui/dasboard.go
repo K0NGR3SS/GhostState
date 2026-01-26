@@ -52,9 +52,9 @@ var (
 )
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
-	headerStyle  = lipgloss.NewStyle().Background(colorGold).Foreground(colorDark).Bold(true).Padding(0, 1).MarginTop(1).MarginBottom(1)
-	sectionStyle = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).Underline(true).MarginTop(1)
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorGold).MarginBottom(1)
+	headerStyle   = lipgloss.NewStyle().Background(colorGold).Foreground(colorDark).Bold(true).Padding(0, 1).MarginTop(1).MarginBottom(1)
+	sectionStyle  = lipgloss.NewStyle().Foreground(colorBlue).Bold(true).Underline(true).MarginTop(1)
 	selectedStyle = lipgloss.NewStyle().Foreground(colorWhite).Bold(true).PaddingLeft(1)
 
 	inputStyle     = lipgloss.NewStyle().Foreground(colorGold)
@@ -70,17 +70,17 @@ var (
 	styleMoney = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
 
 	modalStyle = lipgloss.NewStyle().
-			Width(80).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorGold).
-			Padding(1, 2).
-			Background(colorDark)
+		Width(80).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorGold).
+		Padding(1, 2).
+		Background(colorDark)
 
 	modalTitleStyle = lipgloss.NewStyle().
-			Foreground(colorGold).
-			Bold(true).
-			Underline(true).
-			MarginBottom(1)
+		Foreground(colorGold).
+		Bold(true).
+		Underline(true).
+		MarginBottom(1)
 )
 
 type Model struct {
@@ -112,6 +112,13 @@ type Model struct {
 	width        int
 	height       int
 	scrollOffset int
+
+	streamWriter *report.StreamingReportWriter
+	autoSave     bool
+
+	searchInput  textinput.Model
+	searchActive bool
+	searchFilter string
 }
 
 func InitialModel() Model {
@@ -133,6 +140,13 @@ func InitialModel() Model {
 	tVal.Width = 30
 	tVal.PromptStyle = inputStyle
 	tVal.TextStyle = inputStyle
+
+	searchInput := textinput.New()
+	searchInput.Placeholder = "Search resources..."
+	searchInput.CharLimit = 50
+	searchInput.Width = 50
+	searchInput.PromptStyle = inputStyle
+	searchInput.TextStyle = inputStyle
 
 	choices := []string{
 		"ALL SERVICES",
@@ -184,6 +198,9 @@ func InitialModel() Model {
 		resultCursor:   0,
 		resultViewMode: ViewReport,
 		scrollOffset:   0,
+		searchInput:    searchInput,
+		searchActive:   false,
+		searchFilter:   "",
 	}
 }
 
@@ -191,7 +208,10 @@ func (m Model) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
-func isRiskFinding(r scanner.Resource) bool { return r.Risk == "CRITICAL" || r.Risk == "HIGH" || r.Risk == "MEDIUM" }
+func isRiskFinding(r scanner.Resource) bool {
+	return r.Risk == "CRITICAL" || r.Risk == "HIGH" || r.Risk == "MEDIUM"
+}
+
 func includeByMode(mode string, r scanner.Resource) bool {
 	switch mode {
 	case "RISK":
@@ -201,6 +221,36 @@ func includeByMode(mode string, r scanner.Resource) bool {
 	default:
 		return true
 	}
+}
+
+func (m Model) filterResults(items []scanner.Resource) []scanner.Resource {
+	if m.searchFilter == "" {
+		return items
+	}
+
+	filter := strings.ToLower(m.searchFilter)
+	var filtered []scanner.Resource
+
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.ID), filter) ||
+			strings.Contains(strings.ToLower(item.Type), filter) ||
+			strings.Contains(strings.ToLower(item.Service), filter) ||
+			strings.Contains(strings.ToLower(item.Risk), filter) ||
+			strings.Contains(strings.ToLower(item.Region), filter) {
+			filtered = append(filtered, item)
+			continue
+		}
+
+		for k, v := range item.Tags {
+			if strings.Contains(strings.ToLower(k), filter) ||
+				strings.Contains(strings.ToLower(v), filter) {
+				filtered = append(filtered, item)
+				break
+			}
+		}
+	}
+
+	return filtered
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -220,6 +270,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showModal = false
 				return m, nil
 			}
+			if m.searchActive {
+				m.searchActive = false
+				m.searchInput.Blur()
+				m.searchFilter = ""
+				m.resultCursor = 0
+				m.scrollOffset = 0
+				return m, nil
+			}
 			switch m.state {
 			case StateConfig:
 				m.state = StateMenu
@@ -228,6 +286,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.results = make(map[string][]scanner.Resource)
 				m.resultList = []scanner.Resource{}
 				m.totalCost = 0
+				m.searchFilter = ""
+				m.searchActive = false
 				m.state = StateMenu
 				return m, nil
 			}
@@ -235,6 +295,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showModal {
 			if msg.String() == "esc" || msg.String() == "enter" {
 				m.showModal = false
+				m.scrollOffset = 0
 			}
 			return m, nil
 		}
@@ -264,6 +325,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.scanMode = "ALL"
 				}
+			case "a", "A":
+				m.autoSave = !m.autoSave
 			case "up", "k", "shift+tab":
 				m.handleInputFocus("prev")
 			case "down", "j", "tab":
@@ -277,6 +340,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.resultCursor = 0
 					m.resultViewMode = ViewReport
 					m.scrollOffset = 0
+					m.searchFilter = ""
+					m.searchActive = false
 					m.state = StateScan
 					m.startTime = time.Now()
 					return m, m.startScanCmd()
@@ -285,18 +350,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if m.state == StateDone {
+			if m.searchActive {
+				switch msg.String() {
+				case "esc":
+					m.searchActive = false
+					m.searchInput.Blur()
+					m.searchFilter = ""
+					m.resultCursor = 0
+					m.scrollOffset = 0
+					return m, nil
+				case "enter":
+					m.searchActive = false
+					m.searchInput.Blur()
+					m.searchFilter = m.searchInput.Value()
+					m.resultCursor = 0
+					m.scrollOffset = 0
+					return m, nil
+				default:
+					var cmd tea.Cmd
+					m.searchInput, cmd = m.searchInput.Update(msg)
+					return m, cmd
+				}
+			}
+
 			switch msg.String() {
 			case "q":
 				return m, tea.Quit
+			case "/":
+				m.searchActive = true
+				m.searchInput.Focus()
+				m.searchInput.SetValue("")
+				return m, nil
 			case "s", "S":
 				filename, err := report.GenerateCSV(m.results)
 				if err != nil {
-					m.statusMsg = fmt.Sprintf("Error saving report: %v", err)
+					m.statusMsg = fmt.Sprintf("Error saving CSV: %v", err)
 				} else {
-					m.statusMsg = fmt.Sprintf("Report saved to %s", filename)
+					m.statusMsg = fmt.Sprintf("CSV saved to %s", filename)
 				}
 				return m, nil
-
+			case "j", "J":
+				filename, err := report.ExportJSON(m.results)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Error saving JSON: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("JSON saved to %s", filename)
+				}
+				return m, nil
+			case "h", "H":
+				filename, err := report.ExportHTML(m.results)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Error saving HTML: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("HTML report saved to %s", filename)
+				}
+				return m, nil
+			
 			case "tab":
 				m.resultViewMode++
 				if m.resultViewMode > ViewCost {
@@ -304,15 +413,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.resultCursor = 0
 				m.scrollOffset = 0
-
+			
 			case "up", "k":
 				if m.resultCursor > 0 {
 					m.resultCursor--
 				}
-			case "down", "j":
-				listLen := len(m.resultList)
+			case "down":
+				var listLen int
 				if m.resultViewMode == ViewCost {
-					listLen = len(m.getCostItems())
+					listLen = len(m.filterResults(m.getCostItems()))
+				} else {
+					listLen = len(m.filterResults(m.getSortedItems()))
 				}
 				if m.resultCursor < listLen-1 {
 					m.resultCursor++
@@ -320,17 +431,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				var sorted []scanner.Resource
 				if m.resultViewMode == ViewCost {
-					sorted = m.getCostItems()
+					sorted = m.filterResults(m.getCostItems())
 				} else {
-					sorted = m.getSortedItems()
+					sorted = m.filterResults(m.getSortedItems())
 				}
 				if len(sorted) > 0 && m.resultCursor < len(sorted) {
 					m.modalItem = sorted[m.resultCursor]
 					m.showModal = true
 				}
 			}
-		}
-
+	}		
 	case ghostAws.FoundMsg:
 		res := scanner.Resource(msg)
 		if !includeByMode(m.scanMode, res) {
@@ -344,11 +454,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.results[cat] = append(m.results[cat], res)
 		m.resultList = append(m.resultList, res)
 		m.totalCost += res.MonthlyCost
+
+		if m.autoSave && m.streamWriter != nil {
+			if err := m.streamWriter.WriteResource(cat, res); err != nil {
+				m.statusMsg = fmt.Sprintf("Auto-save error: %v", err)
+			}
+		}
+
 		return m, nil
 
 	case ghostAws.FinishedMsg:
 		m.duration = time.Since(m.startTime)
 		m.state = StateDone
+
+		if m.autoSave && m.streamWriter != nil {
+			if err := m.streamWriter.Close(); err != nil {
+				m.statusMsg = fmt.Sprintf("Error closing auto-save: %v", err)
+			} else {
+				m.statusMsg = fmt.Sprintf("Auto-saved to %s", m.streamWriter.GetFilename())
+			}
+			m.streamWriter = nil
+		}
+
 		return m, nil
 
 	case spinner.TickMsg:
@@ -442,7 +569,9 @@ func (m Model) getCostItems() []scanner.Resource {
 			costItems = append(costItems, r)
 		}
 	}
-	sort.SliceStable(costItems, func(i, j int) bool { return costItems[i].MonthlyCost > costItems[j].MonthlyCost })
+	sort.SliceStable(costItems, func(i, j int) bool {
+		return costItems[i].MonthlyCost > costItems[j].MonthlyCost
+	})
 	return costItems
 }
 
@@ -530,13 +659,49 @@ func (m Model) startScanCmd() tea.Cmd {
 		rawKeys := strings.TrimSpace(m.inputs[0].Value())
 		rawVals := strings.TrimSpace(m.inputs[1].Value())
 		conf := scanner.AuditConfig{
-			ScanEC2: m.selected[2], ScanECS: m.selected[3], ScanLambda: m.selected[4], ScanEKS: m.selected[5], ScanECR: m.selected[6],
-			ScanS3: m.selected[8], ScanRDS: m.selected[9], ScanDynamoDB: m.selected[10], ScanElasti: m.selected[11], ScanEBS: m.selected[12],
-			ScanVPC: m.selected[14], ScanCloudfront: m.selected[15], ScanEIP: m.selected[16], ScanELB: m.selected[17], ScanRoute53: m.selected[18],
-			ScanSecGroups: m.selected[20], ScanACM: m.selected[21], ScanIAM: m.selected[22], ScanSecrets: m.selected[23], ScanKMS: m.selected[24], ScanCloudTrail: m.selected[25],
+			ScanEC2:    m.selected[2],
+			ScanECS:    m.selected[3],
+			ScanLambda: m.selected[4],
+			ScanEKS:    m.selected[5],
+			ScanECR:    m.selected[6],
+
+			ScanS3:       m.selected[8],
+			ScanRDS:      m.selected[9],
+			ScanDynamoDB: m.selected[10],
+			ScanElasti:   m.selected[11],
+			ScanEBS:      m.selected[12],
+
+			ScanVPC:        m.selected[14],
+			ScanCloudfront: m.selected[15],
+			ScanEIP:        m.selected[16],
+			ScanELB:        m.selected[17],
+			ScanRoute53:    m.selected[18],
+
+			ScanSecGroups:  m.selected[20],
+			ScanACM:        m.selected[21],
+			ScanIAM:        m.selected[22],
+			ScanSecrets:    m.selected[23],
+			ScanKMS:        m.selected[24],
+			ScanCloudTrail: m.selected[25],
+
 			ScanCloudWatch: m.selected[27],
-			TargetRule: scanner.AuditRule{TargetKey: rawKeys, TargetVal: rawVals, ScanMode: m.scanMode},
+			TargetRule: scanner.AuditRule{
+				TargetKey: rawKeys,
+				TargetVal: rawVals,
+				ScanMode:  m.scanMode,
+			},
 		}
+
+		if m.autoSave {
+			writer, err := report.NewStreamingReportWriter()
+			if err != nil {
+				m.autoSave = false
+				m.statusMsg = fmt.Sprintf("Auto-save disabled: %v", err)
+			} else {
+				m.streamWriter = writer
+			}
+		}
+
 		go ghostAws.ScanAll(Program, conf)
 		return nil
 	}
@@ -609,29 +774,46 @@ func (m Model) renderListContent() string {
 	var sb strings.Builder
 
 	if m.resultViewMode == ViewStats {
-		sb.WriteString(fmt.Sprintf("Total Resources: %d\n", len(m.resultList)))
+		totalFiltered := len(m.filterResults(m.resultList))
+		sb.WriteString(fmt.Sprintf("Total Resources: %d", len(m.resultList)))
+		if m.searchFilter != "" {
+			sb.WriteString(fmt.Sprintf(" (Filtered: %d)", totalFiltered))
+		}
+		sb.WriteString("\n")
 		sb.WriteString(fmt.Sprintf("Total Estimated Spend: $%.2f/mo\n", m.totalCost))
 		return sb.String()
 	}
 
 	if m.resultViewMode == ViewCost {
-		items := m.getCostItems()
-		sb.WriteString(styleMoney.Render("TOP SPENDERS (Highest Cost First)") + "\n\n")
+		items := m.filterResults(m.getCostItems())
+		sb.WriteString(styleMoney.Render("TOP SPENDERS (Highest Cost First)"))
+		if m.searchFilter != "" {
+			sb.WriteString(fmt.Sprintf(" [Filter: %s]", m.searchFilter))
+		}
+		sb.WriteString("\n\n")
 		for i, item := range items {
 			cursor := " "
 			if i == m.resultCursor {
 				cursor = ">"
 			}
-			line := fmt.Sprintf("%s 💰 $%-8.2f %s (%s)", cursor, item.MonthlyCost, item.ID, item.Type)
+			regionInfo := ""
+			if item.Region != "" {
+				regionInfo = fmt.Sprintf(" [%s]", item.Region)
+			}
+			line := fmt.Sprintf("%s 💰 $%-8.2f %s (%s)%s", cursor, item.MonthlyCost, item.ID, item.Type, regionInfo)
 			sb.WriteString(lipgloss.NewStyle().Foreground(colorGreen).Render(line) + "\n")
 		}
 		if len(items) == 0 {
-			sb.WriteString("No costs detected ($0.00).\n")
+			if m.searchFilter != "" {
+				sb.WriteString("No results match your search.\n")
+			} else {
+				sb.WriteString("No costs detected ($0.00).\n")
+			}
 		}
 		return sb.String()
 	}
 
-	sortedItems := m.getSortedItems()
+	sortedItems := m.filterResults(m.getSortedItems())
 	currentCat := ""
 	for i, item := range sortedItems {
 		catKey := item.Service
@@ -640,7 +822,7 @@ func (m Model) renderListContent() string {
 		}
 		cat := getCategory(catKey)
 
-		if cat != currentCat {
+		if cat != currentCat && len(sortedItems) > 0 {
 			sb.WriteString(resultCatStyle.Render(cat) + "\n")
 			currentCat = cat
 		}
@@ -676,12 +858,22 @@ func (m Model) renderListContent() string {
 				extra = fmt.Sprintf(" (%s)", item.GhostInfo)
 			}
 		}
-		line := fmt.Sprintf("%s %s [%s] %s%s", cursor, emoji, cleanType, item.ID, extra)
+		regionInfo := ""
+		if item.Region != "" {
+			regionInfo = fmt.Sprintf(" [%s]", item.Region)
+		}
+		line := fmt.Sprintf("%s %s [%s] %s%s%s", cursor, emoji, cleanType, item.ID, extra, regionInfo)
 		sb.WriteString(styleFor(item).Render(line) + "\n")
 	}
+
 	if len(sortedItems) == 0 {
-		sb.WriteString(styleLow.Render("No results found for this scan mode.") + "\n")
+		if m.searchFilter != "" {
+			sb.WriteString(styleLow.Render("No results match your search.") + "\n")
+		} else {
+			sb.WriteString(styleLow.Render("No results found for this scan mode.") + "\n")
+		}
 	}
+
 	return sb.String()
 }
 
@@ -694,6 +886,12 @@ func (m Model) renderFooterContent() string {
 			s += "\n" + styleSafe.Render(m.statusMsg) + "\n"
 		}
 	}
+	if m.searchActive {
+		s += "\n" + m.searchInput.View() + " [Enter] Apply [Esc] Cancel\n"
+	} else if m.searchFilter != "" {
+		s += "\n" + lipgloss.NewStyle().Foreground(colorBlue).Render(fmt.Sprintf("Active Filter: %s [/] to change", m.searchFilter)) + "\n"
+	}
+
 	total := len(m.resultList)
 	timeStr := styleTime.Render(fmt.Sprintf("%s", m.duration.Round(time.Millisecond)))
 	s += fmt.Sprintf("\nFound %d resources in %s.", total, timeStr)
@@ -701,16 +899,17 @@ func (m Model) renderFooterContent() string {
 		moneyStr := styleMoney.Render(fmt.Sprintf("$%.2f/mo", m.totalCost))
 		s += fmt.Sprintf("  💰 Est. Cost: %s", moneyStr)
 	}
-	s += "\n[Up/Down] Navigate  [Enter] Details  [S] Save CSV  [Tab] Switch View  [Esc] Back  [Q] Quit"
+	s += "\n[↑/↓] Nav  [Enter] Details  [/] Search  [S] CSV  [J] JSON  [H] HTML  [Tab] View  [Esc] Back  [Q] Quit"
 	return s
 }
 
 func (m Model) renderModal() string {
 	r := m.modalItem
 	s := modalTitleStyle.Render("RESOURCE DETAILS") + "\n\n"
-	s += fmt.Sprintf("ID:   %s\n", r.ID)
-	s += fmt.Sprintf("Type: %s\n", r.Type)
-	s += fmt.Sprintf("ARN:  %s\n", r.ARN)
+	s += fmt.Sprintf("ID:     %s\n", r.ID)
+	s += fmt.Sprintf("Type:   %s\n", r.Type)
+	s += fmt.Sprintf("Region: %s\n", r.Region)
+	s += fmt.Sprintf("ARN:    %s\n", r.ARN)
 	s += "\n"
 	if r.Risk != "" && r.Risk != "SAFE" {
 		s += styleHigh.Render(fmt.Sprintf("RISK: %s", r.Risk)) + "\n"
@@ -729,10 +928,8 @@ func (m Model) renderModal() string {
 	} else {
 		s += styleLow.Render("GHOST: NO") + "\n"
 	}
-
-	s += fmt.Sprintf("Cost: $%.2f/mo\n", r.MonthlyCost)
-	s += "\n"
-	s += "Tags:\n"
+	s += fmt.Sprintf("\nCost: $%.2f/mo\n", r.MonthlyCost)
+	s += "\nTags:\n"
 	keys := make([]string, 0, len(r.Tags))
 	for k := range r.Tags {
 		keys = append(keys, k)
@@ -741,7 +938,7 @@ func (m Model) renderModal() string {
 	for _, k := range keys {
 		s += fmt.Sprintf(" - %s: %s\n", k, r.Tags[k])
 	}
-	s += "\n" + lipgloss.NewStyle().Foreground(colorGray).Render("[ESC] Close")
+	s += "\n" + lipgloss.NewStyle().Foreground(colorGray).Render("[ESC/Enter] Close")
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalStyle.Render(s))
 }
 
@@ -749,7 +946,6 @@ func (m Model) View() string {
 	if m.showModal {
 		return m.renderModal()
 	}
-
 	s := ""
 	if m.state != StateDone {
 		s += lipgloss.NewStyle().Foreground(colorGold).Render(logo) + "\n"
@@ -777,7 +973,14 @@ func (m Model) View() string {
 		}
 	case StateConfig:
 		s += headerStyle.Render(" 2. AUDIT RULE ") + "\n"
-		s += fmt.Sprintf("SCAN MODE: %s (Press 'm' to toggle)\n\n", sectionStyle.Render(m.scanMode))
+		s += fmt.Sprintf("SCAN MODE: %s (Press 'm' to toggle)\n", sectionStyle.Render(m.scanMode))
+
+		autoSaveStatus := "DISABLED"
+		if m.autoSave {
+			autoSaveStatus = "ENABLED"
+		}
+		s += fmt.Sprintf("AUTO-SAVE CSV: %s (Press 'a' to toggle)\n\n", sectionStyle.Render(autoSaveStatus))
+
 		for i := range m.inputs {
 			s += m.inputs[i].View() + "\n"
 		}
