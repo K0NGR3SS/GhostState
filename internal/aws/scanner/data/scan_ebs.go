@@ -49,9 +49,34 @@ func (s *EBSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				}
 			}
 
+			var riskIssues []string
+
+			// Check if volume is unattached (Ghost)
 			if v.State == types.VolumeStateAvailable {
 				res.IsGhost = true
 				res.GhostInfo = "Unattached Volume"
+			}
+
+			// Check if volume is unencrypted (Security Risk)
+			if v.Encrypted == nil || !*v.Encrypted {
+				riskIssues = append(riskIssues, "Unencrypted")
+				res.Risk = "HIGH"
+			}
+
+			// Check for old volume types (gp2 vs gp3 cost optimization)
+			if v.VolumeType == types.VolumeTypeGp2 {
+				riskIssues = append(riskIssues, "GP2 (consider upgrading to GP3 for cost savings)")
+				if res.Risk == "SAFE" {
+					res.Risk = "LOW"
+				}
+			}
+
+			// Build risk info
+			if len(riskIssues) > 0 {
+				res.RiskInfo = riskIssues[0]
+				for i := 1; i < len(riskIssues); i++ {
+					res.RiskInfo += "; " + riskIssues[i]
+				}
 			}
 
 			if scanner.MatchesRule(res.Tags, rule) {

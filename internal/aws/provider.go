@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/computing"
@@ -36,7 +37,30 @@ func NewProvider(cfg aws.Config) (*Provider, error) {
 	}, nil
 }
 
-func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, error) {
+// Get all enabled AWS regions
+func (p *Provider) GetAllRegions(ctx context.Context) ([]string, error) {
+	ec2Client := ec2.NewFromConfig(p.cfg)
+	result, err := ec2Client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{
+		AllRegions: aws.Bool(false), // Only enabled regions
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var regions []string
+	for _, region := range result.Regions {
+		if region.RegionName != nil {
+			regions = append(regions, *region.RegionName)
+		}
+	}
+	return regions, nil
+}
+
+func (p *Provider) scanRegion(ctx context.Context, region string, conf scanner.AuditConfig) []scanner.Resource {
+	// Create region-specific config
+	regionalCfg := p.cfg.Copy()
+	regionalCfg.Region = region
+
 	resultsChan := make(chan scanner.Resource, 1000)
 	var wg sync.WaitGroup
 
@@ -47,6 +71,7 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		res, err := s.Scan(ctx, conf.TargetRule)
 		if err == nil {
 			for _, r := range res {
+				r.Region = region // Tag resource with region
 				resultsChan <- r
 			}
 		}
@@ -55,100 +80,103 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 	// --- Computing ---
 	if conf.ScanEC2 {
 		wg.Add(1)
-		go run(computing.NewEC2Scanner(p.cfg))
+		go run(computing.NewEC2Scanner(regionalCfg))
 	}
 	if conf.ScanECS {
 		wg.Add(1)
-		go run(computing.NewECSScanner(p.cfg))
+		go run(computing.NewECSScanner(regionalCfg))
 	}
 	if conf.ScanLambda {
 		wg.Add(1)
-		go run(computing.NewLambdaScanner(p.cfg))
+		go run(computing.NewLambdaScanner(regionalCfg))
 	}
 	if conf.ScanEKS {
 		wg.Add(1)
-		go run(computing.NewEKSScanner(p.cfg))
+		go run(computing.NewEKSScanner(regionalCfg))
 	}
 	if conf.ScanECR {
 		wg.Add(1)
-		go run(computing.NewECRScanner(p.cfg))
+		go run(computing.NewECRScanner(regionalCfg))
 	}
 
 	// --- Data ---
-	if conf.ScanS3 {
+	if conf.ScanS3 && region == "us-east-1" {
+		// S3 is global, only scan once
 		wg.Add(1)
-		go run(data.NewS3Scanner(p.cfg))
+		go run(data.NewS3Scanner(regionalCfg))
 	}
 	if conf.ScanRDS {
 		wg.Add(1)
-		go run(data.NewRDSScanner(p.cfg))
+		go run(data.NewRDSScanner(regionalCfg))
 	}
 	if conf.ScanDynamoDB {
 		wg.Add(1)
-		go run(data.NewDynamoDBScanner(p.cfg))
+		go run(data.NewDynamoDBScanner(regionalCfg))
 	}
 	if conf.ScanElasti {
 		wg.Add(1)
-		go run(data.NewElastiScanner(p.cfg))
+		go run(data.NewElastiScanner(regionalCfg))
 	}
 	if conf.ScanEBS {
 		wg.Add(1)
-		go run(data.NewEBSScanner(p.cfg))
+		go run(data.NewEBSScanner(regionalCfg))
 	}
 
 	// --- Network ---
 	if conf.ScanVPC {
 		wg.Add(1)
-		go run(network.NewVPCScanner(p.cfg))
+		go run(network.NewVPCScanner(regionalCfg))
 	}
-	if conf.ScanCloudfront {
+	if conf.ScanCloudfront && region == "us-east-1" {
+		// CloudFront is global, only scan once
 		wg.Add(1)
-		go run(network.NewCloudFrontScanner(p.cfg))
+		go run(network.NewCloudFrontScanner(regionalCfg))
 	}
 	if conf.ScanEIP {
 		wg.Add(1)
-		go run(network.NewEIPScanner(p.cfg))
+		go run(network.NewEIPScanner(regionalCfg))
 	}
 	if conf.ScanELB {
 		wg.Add(1)
-		go run(network.NewELBScanner(p.cfg))
+		go run(network.NewELBScanner(regionalCfg))
 	}
-	if conf.ScanRoute53 {
+	if conf.ScanRoute53 && region == "us-east-1" {
+		// Route53 is global
 		wg.Add(1)
-		go run(network.NewRoute53Scanner(p.cfg))
+		go run(network.NewRoute53Scanner(regionalCfg))
 	}
 
 	// --- Security ---
 	if conf.ScanACM {
 		wg.Add(1)
-		go run(security.NewACMScanner(p.cfg))
+		go run(security.NewACMScanner(regionalCfg))
 	}
 	if conf.ScanSecGroups {
 		wg.Add(1)
-		go run(security.NewSGScanner(p.cfg))
+		go run(security.NewSGScanner(regionalCfg))
 	}
-	if conf.ScanIAM {
+	if conf.ScanIAM && region == "us-east-1" {
+		// IAM is global
 		wg.Add(1)
-		go run(security.NewIAMScanner(p.cfg))
+		go run(security.NewIAMScanner(regionalCfg))
 	}
 	if conf.ScanSecrets {
 		wg.Add(1)
-		go run(security.NewSecretsScanner(p.cfg))
+		go run(security.NewSecretsScanner(regionalCfg))
 	}
 	if conf.ScanKMS {
 		wg.Add(1)
-		go run(security.NewKMSScanner(p.cfg))
+		go run(security.NewKMSScanner(regionalCfg))
 	}
-
 	if conf.ScanCloudTrail {
 		wg.Add(1)
-		go run(security.NewTrailScanner(p.cfg))
+		go run(security.NewTrailScanner(regionalCfg))
 	}
 
 	// --- Monitoring ---
 	if conf.ScanCloudWatch {
 		wg.Add(1)
-		go run(monitoring.NewCloudWatchScanner(p.cfg))
+		go run(monitoring.NewCloudWatchScanner(regionalCfg))
 	}
 
 	go func() {
@@ -161,9 +189,35 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		if res.MonthlyCost == 0 {
 			res.MonthlyCost = EstimateCost(res.Service, res.Type, res.Size)
 		}
-
 		results = append(results, res)
 	}
 
-	return results, nil
+	return results
+}
+
+func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, error) {
+	regions := conf.Regions
+	
+	// If no regions specified, use current region
+	if len(regions) == 0 {
+		regions = []string{p.region}
+	}
+
+	var allResults []scanner.Resource
+	var mu sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, region := range regions {
+		wg.Add(1)
+		go func(r string) {
+			defer wg.Done()
+			results := p.scanRegion(ctx, r, conf)
+			mu.Lock()
+			allResults = append(allResults, results...)
+			mu.Unlock()
+		}(region)
+	}
+
+	wg.Wait()
+	return allResults, nil
 }
