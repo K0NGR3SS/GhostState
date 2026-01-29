@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-
+	"github.com/K0NGR3SS/GhostState/internal/aws/cache"
+	"github.com/K0NGR3SS/GhostState/internal/aws/pool"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/computing"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/data"
 	"github.com/K0NGR3SS/GhostState/internal/aws/scanner/monitoring"
@@ -21,6 +23,7 @@ type Provider struct {
 	cfg       aws.Config
 	accountID string
 	region    string
+	tagCache  *cache.TagCache
 }
 
 func NewProvider(cfg aws.Config) (*Provider, error) {
@@ -34,14 +37,15 @@ func NewProvider(cfg aws.Config) (*Provider, error) {
 		cfg:       cfg,
 		accountID: *identity.Account,
 		region:    cfg.Region,
+		tagCache:  cache.NewTagCache(5 * time.Minute),
 	}, nil
 }
 
-// Get all enabled AWS regions
+// GetAllRegions returns all enabled AWS regions
 func (p *Provider) GetAllRegions(ctx context.Context) ([]string, error) {
 	ec2Client := ec2.NewFromConfig(p.cfg)
 	result, err := ec2Client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{
-		AllRegions: aws.Bool(false), // Only enabled regions
+		AllRegions: aws.Bool(false),
 	})
 	if err != nil {
 		return nil, err
@@ -61,129 +65,119 @@ func (p *Provider) scanRegion(ctx context.Context, region string, conf scanner.A
 	regionalCfg := p.cfg.Copy()
 	regionalCfg.Region = region
 
+	// Create worker pool with 10 concurrent workers
+	workerPool := pool.NewWorkerPool(10)
+	workerPool.Start()
+
 	resultsChan := make(chan scanner.Resource, 1000)
 	var wg sync.WaitGroup
 
-	run := func(s interface {
+	// Helper function to submit scanner tasks to worker pool
+	submit := func(s interface {
 		Scan(context.Context, scanner.AuditRule) ([]scanner.Resource, error)
 	}) {
-		defer wg.Done()
-		res, err := s.Scan(ctx, conf.TargetRule)
-		if err == nil {
-			for _, r := range res {
-				r.Region = region // Tag resource with region
-				resultsChan <- r
+		wg.Add(1)
+		workerPool.Submit(func(ctx context.Context) error {
+			defer wg.Done()
+			res, err := s.Scan(ctx, conf.TargetRule)
+			if err == nil {
+				for _, r := range res {
+					r.Region = region // Tag resource with region
+					resultsChan <- r
+				}
 			}
-		}
+			return err
+		})
 	}
 
 	// --- Computing ---
 	if conf.ScanEC2 {
-		wg.Add(1)
-		go run(computing.NewEC2Scanner(regionalCfg))
+		submit(computing.NewEC2Scanner(regionalCfg))
 	}
 	if conf.ScanECS {
-		wg.Add(1)
-		go run(computing.NewECSScanner(regionalCfg))
+		submit(computing.NewECSScanner(regionalCfg))
 	}
 	if conf.ScanLambda {
-		wg.Add(1)
-		go run(computing.NewLambdaScanner(regionalCfg))
+		submit(computing.NewLambdaScanner(regionalCfg))
 	}
 	if conf.ScanEKS {
-		wg.Add(1)
-		go run(computing.NewEKSScanner(regionalCfg))
+		submit(computing.NewEKSScanner(regionalCfg))
 	}
 	if conf.ScanECR {
-		wg.Add(1)
-		go run(computing.NewECRScanner(regionalCfg))
+		submit(computing.NewECRScanner(regionalCfg))
 	}
 
 	// --- Data ---
 	if conf.ScanS3 && region == "us-east-1" {
 		// S3 is global, only scan once
-		wg.Add(1)
-		go run(data.NewS3Scanner(regionalCfg))
+		submit(data.NewS3Scanner(regionalCfg))
 	}
 	if conf.ScanRDS {
-		wg.Add(1)
-		go run(data.NewRDSScanner(regionalCfg))
+		submit(data.NewRDSScanner(regionalCfg))
 	}
 	if conf.ScanDynamoDB {
-		wg.Add(1)
-		go run(data.NewDynamoDBScanner(regionalCfg))
+		submit(data.NewDynamoDBScanner(regionalCfg))
 	}
 	if conf.ScanElasti {
-		wg.Add(1)
-		go run(data.NewElastiScanner(regionalCfg))
+		submit(data.NewElastiScanner(regionalCfg))
 	}
 	if conf.ScanEBS {
-		wg.Add(1)
-		go run(data.NewEBSScanner(regionalCfg))
+		submit(data.NewEBSScanner(regionalCfg))
 	}
 
 	// --- Network ---
 	if conf.ScanVPC {
-		wg.Add(1)
-		go run(network.NewVPCScanner(regionalCfg))
+		submit(network.NewVPCScanner(regionalCfg))
 	}
 	if conf.ScanCloudfront && region == "us-east-1" {
 		// CloudFront is global, only scan once
-		wg.Add(1)
-		go run(network.NewCloudFrontScanner(regionalCfg))
+		submit(network.NewCloudFrontScanner(regionalCfg))
 	}
 	if conf.ScanEIP {
-		wg.Add(1)
-		go run(network.NewEIPScanner(regionalCfg))
+		submit(network.NewEIPScanner(regionalCfg))
 	}
 	if conf.ScanELB {
-		wg.Add(1)
-		go run(network.NewELBScanner(regionalCfg))
+		submit(network.NewELBScanner(regionalCfg))
 	}
 	if conf.ScanRoute53 && region == "us-east-1" {
 		// Route53 is global
-		wg.Add(1)
-		go run(network.NewRoute53Scanner(regionalCfg))
+		submit(network.NewRoute53Scanner(regionalCfg))
 	}
 
 	// --- Security ---
 	if conf.ScanACM {
-		wg.Add(1)
-		go run(security.NewACMScanner(regionalCfg))
+		submit(security.NewACMScanner(regionalCfg))
 	}
 	if conf.ScanSecGroups {
-		wg.Add(1)
-		go run(security.NewSGScanner(regionalCfg))
+		submit(security.NewSGScanner(regionalCfg))
 	}
 	if conf.ScanIAM && region == "us-east-1" {
 		// IAM is global
-		wg.Add(1)
-		go run(security.NewIAMScanner(regionalCfg))
+		submit(security.NewIAMScanner(regionalCfg))
 	}
 	if conf.ScanSecrets {
-		wg.Add(1)
-		go run(security.NewSecretsScanner(regionalCfg))
+		submit(security.NewSecretsScanner(regionalCfg))
 	}
 	if conf.ScanKMS {
-		wg.Add(1)
-		go run(security.NewKMSScanner(regionalCfg))
+		submit(security.NewKMSScanner(regionalCfg))
 	}
 	if conf.ScanCloudTrail {
-		wg.Add(1)
-		go run(security.NewTrailScanner(regionalCfg))
+		submit(security.NewTrailScanner(regionalCfg))
 	}
 
 	// --- Monitoring ---
 	if conf.ScanCloudWatch {
-		wg.Add(1)
-		go run(monitoring.NewCloudWatchScanner(regionalCfg))
+		submit(monitoring.NewCloudWatchScanner(regionalCfg))
 	}
 
+	// Wait for all scan tasks to complete, then close channels
 	go func() {
 		wg.Wait()
+		workerPool.Wait()
 		close(resultsChan)
 	}()
 
+	// Collect results
 	var results []scanner.Resource
 	for res := range resultsChan {
 		if res.MonthlyCost == 0 {
@@ -196,8 +190,11 @@ func (p *Provider) scanRegion(ctx context.Context, region string, conf scanner.A
 }
 
 func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, error) {
+	// Clean expired cache entries before scan
+	p.tagCache.CleanExpired()
+
 	regions := conf.Regions
-	
+
 	// If no regions specified, use current region
 	if len(regions) == 0 {
 		regions = []string{p.region}
@@ -206,6 +203,7 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 	var allResults []scanner.Resource
 	var mu sync.Mutex
 
+	// Scan each region concurrently
 	var wg sync.WaitGroup
 	for _, region := range regions {
 		wg.Add(1)
