@@ -37,6 +37,18 @@ func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner
 		bucketName := b.Name
 		var riskIssues []string
 
+		// Best-effort tag hydration for rule matching.
+		tagOut, err := s.Client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+			Bucket: bucketName,
+		})
+		if err == nil {
+			for _, tag := range tagOut.TagSet {
+				if tag.Key != nil && tag.Value != nil {
+					res.Tags[*tag.Key] = *tag.Value
+				}
+			}
+		}
+
 		// Check public access block
 		pab, err := s.Client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: bucketName})
 		isPublic := false
@@ -107,7 +119,7 @@ func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner
 			Bucket:  bucketName,
 			MaxKeys: aws.Int32(1),
 		})
-		if err == nil && *listOut.KeyCount == 0 {
+		if err == nil && listOut.KeyCount != nil && *listOut.KeyCount == 0 {
 			res.IsGhost = true
 			res.GhostInfo = "Empty Bucket"
 		}

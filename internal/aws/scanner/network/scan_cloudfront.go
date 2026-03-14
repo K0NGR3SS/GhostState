@@ -41,12 +41,25 @@ func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([
 				Risk: "SAFE",
 			}
 
+			if d.ARN != nil {
+				tagOut, err := s.Client.ListTagsForResource(ctx, &cloudfront.ListTagsForResourceInput{
+					Resource: d.ARN,
+				})
+				if err == nil && tagOut.Tags != nil {
+					for _, tag := range tagOut.Tags.Items {
+						if tag.Key != nil && tag.Value != nil {
+							res.Tags[*tag.Key] = *tag.Value
+						}
+					}
+				}
+			}
+
 			if d.WebACLId == nil || *d.WebACLId == "" {
 				res.Risk = "MEDIUM"
 				res.RiskInfo = "No WAF Attached"
 			}
 
-			if !*d.Enabled {
+			if d.Enabled != nil && !*d.Enabled {
 				res.IsGhost = true
 				res.GhostInfo = "Distribution Disabled"
 			}

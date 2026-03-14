@@ -26,10 +26,12 @@ func (s *Route53Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sc
 
 	for _, zone := range listOut.HostedZones {
 		res := scanner.Resource{
-			ID:   aws.ToString(zone.Id),
-			Type: "Route53 Zone",
-			Tags: map[string]string{"Name": aws.ToString(zone.Name)},
-			Risk: "SAFE",
+			ID:      aws.ToString(zone.Id),
+			Service: "Route53",
+			Type:    "Route53 Zone",
+			Status:  "Active",
+			Tags:    map[string]string{"Name": aws.ToString(zone.Name)},
+			Risk:    "SAFE",
 		}
 
 		recs, err := s.client.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
@@ -37,7 +39,7 @@ func (s *Route53Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sc
 			MaxItems:     aws.Int32(5),
 		})
 		
-		if err == nil {
+		if err == nil && recs != nil {
 			if len(recs.ResourceRecordSets) <= 2 {
 				res.IsGhost = true
 				res.GhostInfo = "Empty Hosted Zone (only SOA/NS records)"

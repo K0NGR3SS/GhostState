@@ -27,14 +27,34 @@ func (s *ELBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 		}
 
 		for _, lb := range out.LoadBalancers {
+			status := "unknown"
+			if lb.State != nil {
+				status = string(lb.State.Code)
+			}
+
 			res := scanner.Resource{
 				ID:   aws.ToString(lb.LoadBalancerName),
 				ARN:  aws.ToString(lb.LoadBalancerArn),
 				Service: "ELB",
 				Type: "Load Balancer",
-				Status: string(lb.State.Code),
+				Status: status,
 				Tags: map[string]string{},
 				Risk: "SAFE",
+			}
+
+			if lb.LoadBalancerArn != nil {
+				tagOut, err := s.Client.DescribeTags(ctx, &elasticloadbalancingv2.DescribeTagsInput{
+					ResourceArns: []string{*lb.LoadBalancerArn},
+				})
+				if err == nil {
+					for _, tagDesc := range tagOut.TagDescriptions {
+						for _, tag := range tagDesc.Tags {
+							if tag.Key != nil && tag.Value != nil {
+								res.Tags[*tag.Key] = *tag.Value
+							}
+						}
+					}
+				}
 			}
 
 			if lb.Scheme == "internet-facing" {
