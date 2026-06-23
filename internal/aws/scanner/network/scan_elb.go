@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -33,13 +34,13 @@ func (s *ELBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 			}
 
 			res := scanner.Resource{
-				ID:   aws.ToString(lb.LoadBalancerName),
-				ARN:  aws.ToString(lb.LoadBalancerArn),
+				ID:      aws.ToString(lb.LoadBalancerName),
+				ARN:     aws.ToString(lb.LoadBalancerArn),
 				Service: "ELB",
-				Type: "Load Balancer",
-				Status: status,
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				Type:    "Load Balancer",
+				Status:  status,
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			if lb.LoadBalancerArn != nil {
@@ -57,9 +58,55 @@ func (s *ELBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				}
 			}
 
+			var riskIssues []string
 			if lb.Scheme == "internet-facing" {
 				res.Risk = "LOW"
-				res.RiskInfo = "Internet Facing"
+				riskIssues = append(riskIssues, "Internet Facing")
+			}
+
+			if lb.LoadBalancerArn != nil {
+				attrOut, err := s.Client.DescribeLoadBalancerAttributes(ctx, &elasticloadbalancingv2.DescribeLoadBalancerAttributesInput{
+					LoadBalancerArn: lb.LoadBalancerArn,
+				})
+				if err == nil {
+					accessLoggingEnabled := false
+					for _, attr := range attrOut.Attributes {
+						if aws.ToString(attr.Key) == "access_logs.s3.enabled" && aws.ToString(attr.Value) == "true" {
+							accessLoggingEnabled = true
+							break
+						}
+					}
+					if !accessLoggingEnabled {
+						if res.Risk == "SAFE" {
+							res.Risk = "LOW"
+						}
+						riskIssues = append(riskIssues, "Access Logging Disabled")
+					}
+				}
+
+				listenerOut, err := s.Client.DescribeListeners(ctx, &elasticloadbalancingv2.DescribeListenersInput{
+					LoadBalancerArn: lb.LoadBalancerArn,
+				})
+				if err == nil && len(listenerOut.Listeners) > 0 {
+					hasSecureListener := false
+					for _, listener := range listenerOut.Listeners {
+						protocol := strings.ToUpper(string(listener.Protocol))
+						if protocol == "HTTPS" || protocol == "TLS" {
+							hasSecureListener = true
+							break
+						}
+					}
+					if lb.Scheme == "internet-facing" && !hasSecureListener {
+						if res.Risk == "SAFE" || res.Risk == "LOW" {
+							res.Risk = "MEDIUM"
+						}
+						riskIssues = append(riskIssues, "No HTTPS/TLS Listener")
+					}
+				}
+			}
+
+			if len(riskIssues) > 0 {
+				res.RiskInfo = strings.Join(riskIssues, "; ")
 			}
 
 			if scanner.MatchesRule(res.Tags, rule) {

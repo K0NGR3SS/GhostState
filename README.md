@@ -1,11 +1,11 @@
-# GhostState (v1.2)
+# GhostState (v1.4)
 
 ![Status](https://img.shields.io/badge/status-building-blue)
 ![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Last Updated:** January 29, 2026
+> **Last Updated:** June 23, 2026
 
 GhostState is an interactive CLI security, governance, and cost-analysis tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets), "Risk" resources (security vulnerabilities), and estimates your monthly cloud spend in real-time.
 
@@ -13,7 +13,39 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 
 ---
 
-## New Features for v1.2
+## New Features for v1.4
+
+### **Real Multi-Region Scanning**
+- **Region Scope Selector:** Press `R` in setup to scan the current AWS region, all enabled regions, or a custom comma-separated region list
+- **Global Services Included Once:** S3, IAM, CloudFront, and Route53 are scanned once per run even when your active AWS region is not `us-east-1`
+- **Partial Failure Visibility:** Per-service/per-region scan failures are shown in the TUI and included in exports without discarding successful results
+
+### **Actionable Findings**
+- **Remediation Guidance:** Findings now include recommendations, not just raw risk text
+- **Control References:** Key findings map to relevant Security Hub/AWS Config-style control references
+- **Account/Region Context:** Resources include account ID and region in details and reports
+
+### **Expanded Risk Checks**
+- **EC2:** Flags public IP exposure and instances that do not require IMDSv2
+- **RDS:** Detects public databases, unencrypted storage, missing automated backups, and disabled deletion protection
+- **CloudTrail:** Checks stopped logging, log validation, multi-region coverage, KMS encryption, and CloudWatch Logs integration
+- **ACM:** Highlights expiring/expired certificates and weak RSA key lengths
+- **Load Balancers:** Flags internet-facing load balancers with missing access logs or no HTTPS/TLS listener
+- **Lambda:** Detects deprecated runtimes and public unauthenticated Function URLs
+- **ECR:** Detects disabled scan-on-push, mutable image tags, missing lifecycle policies, and empty repositories
+
+### **Better Cost & Waste Workflows**
+- **Estimated Savings:** Ghost resources and gp2-to-gp3 EBS opportunities now show estimated monthly savings
+- **Quick Filters:** Press `1` for all, `2` for risks, `3` for ghost resources, and `4` for savings opportunities
+- **Cost Caveat:** Reports clearly label cost and savings values as estimates
+
+### **Richer Reports**
+- **CSV/JSON/HTML v1.4 Fields:** Exports include account ID, region, recommendations, control refs, savings estimates, scan scope, cost note, and partial failures
+- **HTML Summary:** The HTML report now includes an executive-style summary, savings card, and scan metadata
+
+---
+
+## Earlier Features from v1.2
 
 ### **Advanced Cost Analysis**
 - **Real-time Cost Estimation:** Accurate monthly cost estimates for EC2 (including EBS volumes and public IPs), RDS (with storage), and all major services
@@ -61,6 +93,8 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 ### Interactive Dashboard (TUI)
 - **Live Navigation:** Navigate through audit results using arrow keys (`↑`, `↓`), cycle views (Report/Stats/Cost) with `Tab`, and go back with `Esc`
 - **Drill-Down Inspector:** Press `Enter` on any resource to open a **Detail Modal**, viewing raw tags, full ARNs, cost breakdowns, and risk explanations
+- **Region Control:** Press `R` in setup to switch between current region, all enabled regions, and custom regions
+- **Quick Result Filters:** Press `1` for all results, `2` for risk findings, `3` for ghost resources, and `4` for savings opportunities
 - **Smart Scan Modes:**
   - **ALL:** Displays the full infrastructure inventory
   - **RISK:** Filters purely for **Critical** (💀), **High** (🚨), and **Medium** (⚠️) security issues

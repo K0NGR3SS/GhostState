@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -55,12 +56,31 @@ func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				}
 			}
 
+			var riskIssues []string
 			if db.PubliclyAccessible != nil && *db.PubliclyAccessible {
 				res.Risk = "HIGH"
-				res.RiskInfo = "Publicly Accessible"
-			} else if db.StorageEncrypted == nil || !*db.StorageEncrypted {
-				res.Risk = "MEDIUM"
-				res.RiskInfo = "Unencrypted Storage"
+				riskIssues = append(riskIssues, "Publicly Accessible")
+			}
+			if db.StorageEncrypted == nil || !*db.StorageEncrypted {
+				if res.Risk == "SAFE" {
+					res.Risk = "MEDIUM"
+				}
+				riskIssues = append(riskIssues, "Unencrypted Storage")
+			}
+			if db.BackupRetentionPeriod == nil || *db.BackupRetentionPeriod == 0 {
+				if res.Risk == "SAFE" {
+					res.Risk = "MEDIUM"
+				}
+				riskIssues = append(riskIssues, "Automated Backups Disabled")
+			}
+			if db.DeletionProtection == nil || !*db.DeletionProtection {
+				if res.Risk == "SAFE" {
+					res.Risk = "LOW"
+				}
+				riskIssues = append(riskIssues, "Deletion Protection Disabled")
+			}
+			if len(riskIssues) > 0 {
+				res.RiskInfo = strings.Join(riskIssues, "; ")
 			}
 
 			if scanner.MatchesRule(res.Tags, rule) {

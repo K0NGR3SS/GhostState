@@ -2,10 +2,13 @@ package computing
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/service/ecr/types"
 )
 
 type ECRScanner struct {
@@ -29,11 +32,12 @@ func (s *ECRScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 
 		for _, repo := range out.Repositories {
 			res := scanner.Resource{
-				ID:   aws.ToString(repo.RepositoryName),
-				ARN:  aws.ToString(repo.RepositoryArn),
-				Type: "ECR Repo",
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				ID:      aws.ToString(repo.RepositoryName),
+				ARN:     aws.ToString(repo.RepositoryArn),
+				Service: "ECR",
+				Type:    "ECR Repo",
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			if repo.RepositoryArn != nil {
@@ -58,6 +62,7 @@ func (s *ECRScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				res.GhostInfo = "Empty Repository (Unused)"
 			}
 
+			var riskIssues []string
 			if repo.ImageScanningConfiguration != nil && !repo.ImageScanningConfiguration.ScanOnPush {
 				res.IsGhost = true
 				if res.GhostInfo == "" {
@@ -67,7 +72,29 @@ func (s *ECRScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				}
 
 				res.Risk = "LOW"
-				res.RiskInfo = "Image Scanning Disabled"
+				riskIssues = append(riskIssues, "Image Scanning Disabled")
+			}
+
+			if repo.ImageTagMutability == types.ImageTagMutabilityMutable {
+				if res.Risk == "SAFE" {
+					res.Risk = "LOW"
+				}
+				riskIssues = append(riskIssues, "Image Tags Mutable")
+			}
+
+			lifecycleOut, err := s.Client.GetLifecyclePolicy(ctx, &ecr.GetLifecyclePolicyInput{
+				RepositoryName: repo.RepositoryName,
+			})
+			var notFound *types.LifecyclePolicyNotFoundException
+			if errors.As(err, &notFound) ||
+				(err == nil && (lifecycleOut == nil || strings.TrimSpace(aws.ToString(lifecycleOut.LifecyclePolicyText)) == "")) {
+				if res.Risk == "SAFE" {
+					res.Risk = "LOW"
+				}
+				riskIssues = append(riskIssues, "Lifecycle Policy Missing")
+			}
+			if len(riskIssues) > 0 {
+				res.RiskInfo = strings.Join(riskIssues, "; ")
 			}
 
 			if scanner.MatchesRule(res.Tags, rule) {

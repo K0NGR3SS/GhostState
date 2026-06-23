@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
@@ -29,6 +30,8 @@ func NewStreamingReportWriter() (*StreamingReportWriter, error) {
 	// Write CSV headers immediately
 	headers := []string{
 		"Category",
+		"AccountID",
+		"Region",
 		"Service",
 		"Type",
 		"ID/Name",
@@ -39,6 +42,9 @@ func NewStreamingReportWriter() (*StreamingReportWriter, error) {
 		"GhostInfo",
 		"Risk",
 		"RiskInfo",
+		"Recommendation",
+		"SavingsEstimate ($)",
+		"ControlRefs",
 		"Tags",
 	}
 
@@ -70,6 +76,8 @@ func (w *StreamingReportWriter) WriteResource(category string, r scanner.Resourc
 
 	row := []string{
 		category,
+		r.AccountID,
+		r.Region,
 		r.Service,
 		r.Type,
 		r.ID,
@@ -80,6 +88,9 @@ func (w *StreamingReportWriter) WriteResource(category string, r scanner.Resourc
 		r.GhostInfo,
 		r.Risk,
 		r.RiskInfo,
+		r.Recommendation,
+		fmt.Sprintf("%.2f", r.SavingsEstimate),
+		strings.Join(r.ControlRefs, "; "),
 		tagsStr,
 	}
 
@@ -112,8 +123,12 @@ func (w *StreamingReportWriter) GetFilename() string {
 	return w.filename
 }
 
-// GenerateCSV - Original function (kept for backward compatibility)
 func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
+	return GenerateCSVWithMetadata(results, ExportMetadata{})
+}
+
+// GenerateCSVWithMetadata writes a compliance-ready CSV with v1.4 action metadata.
+func GenerateCSVWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (string, error) {
 	filename := fmt.Sprintf("ghoststate_report_%s.csv", time.Now().Format("2006-01-02_150405"))
 	file, err := os.Create(filename)
 	if err != nil {
@@ -126,6 +141,8 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 
 	headers := []string{
 		"Category",
+		"AccountID",
+		"Region",
 		"Service",
 		"Type",
 		"ID/Name",
@@ -136,6 +153,9 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 		"GhostInfo",
 		"Risk",
 		"RiskInfo",
+		"Recommendation",
+		"SavingsEstimate ($)",
+		"ControlRefs",
 		"Tags",
 	}
 
@@ -157,6 +177,8 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 
 			row := []string{
 				category,
+				r.AccountID,
+				r.Region,
 				r.Service,
 				r.Type,
 				r.ID,
@@ -167,10 +189,24 @@ func GenerateCSV(results map[string][]scanner.Resource) (string, error) {
 				r.GhostInfo,
 				r.Risk,
 				r.RiskInfo,
+				r.Recommendation,
+				fmt.Sprintf("%.2f", r.SavingsEstimate),
+				strings.Join(r.ControlRefs, "; "),
 				tagsStr,
 			}
 
 			if err := writer.Write(row); err != nil {
+				return "", err
+			}
+		}
+	}
+
+	if len(meta.Errors) > 0 {
+		_ = writer.Write([]string{})
+		_ = writer.Write([]string{"Scan Errors"})
+		_ = writer.Write([]string{"Service", "Region", "Error"})
+		for _, scanErr := range meta.Errors {
+			if err := writer.Write([]string{scanErr.Service, scanErr.Region, scanErr.Error}); err != nil {
 				return "", err
 			}
 		}

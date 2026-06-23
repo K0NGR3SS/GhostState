@@ -17,18 +17,36 @@ type CategoryData struct {
 }
 
 type ResourceData struct {
-	ID          string
-	Type        string
-	Region      string
-	Risk        string
-	RiskClass   string
-	IsGhost     bool
-	RiskInfo    string
-	GhostInfo   string
-	MonthlyCost float64
+	ID              string
+	Type            string
+	Service         string
+	AccountID       string
+	Region          string
+	Risk            string
+	RiskClass       string
+	IsGhost         bool
+	RiskInfo        string
+	GhostInfo       string
+	Recommendation  string
+	ControlRefs     []string
+	MonthlyCost     float64
+	SavingsEstimate float64
+}
+
+type ExportMetadata struct {
+	ScanMode     string              `json:"scan_mode,omitempty"`
+	RegionMode   string              `json:"region_mode,omitempty"`
+	Regions      []string            `json:"regions,omitempty"`
+	Errors       []scanner.ScanError `json:"errors,omitempty"`
+	TotalSavings float64             `json:"total_savings,omitempty"`
+	CostNote     string              `json:"cost_note,omitempty"`
 }
 
 func ExportJSON(results map[string][]scanner.Resource) (string, error) {
+	return ExportJSONWithMetadata(results, ExportMetadata{})
+}
+
+func ExportJSONWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (string, error) {
 	filename := fmt.Sprintf("ghoststate_report_%s.json", time.Now().Format("2006-01-02_150405"))
 	file, err := os.Create(filename)
 	if err != nil {
@@ -54,6 +72,19 @@ func ExportJSON(results map[string][]scanner.Resource) (string, error) {
 			}
 			return cost
 		}(),
+		"total_savings": func() float64 {
+			if meta.TotalSavings > 0 {
+				return meta.TotalSavings
+			}
+			savings := 0.0
+			for _, resources := range results {
+				for _, r := range resources {
+					savings += r.SavingsEstimate
+				}
+			}
+			return savings
+		}(),
+		"scan":       meta,
 		"categories": results,
 	}
 
@@ -67,6 +98,10 @@ func ExportJSON(results map[string][]scanner.Resource) (string, error) {
 }
 
 func ExportHTML(results map[string][]scanner.Resource) (string, error) {
+	return ExportHTMLWithMetadata(results, ExportMetadata{})
+}
+
+func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (string, error) {
 	filename := fmt.Sprintf("ghoststate_report_%s.html", time.Now().Format("2006-01-02_150405"))
 	file, err := os.Create(filename)
 	if err != nil {
@@ -80,11 +115,13 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
 	highCount := 0
 	mediumCount := 0
 	ghostCount := 0
+	totalSavings := 0.0
 
 	for _, resources := range results {
 		totalResources += len(resources)
 		for _, r := range resources {
 			totalCost += r.MonthlyCost
+			totalSavings += r.SavingsEstimate
 			switch r.Risk {
 			case "CRITICAL":
 				criticalCount++
@@ -108,15 +145,20 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
 			for _, r := range resources {
 				riskClass := strings.ToLower(r.Risk)
 				resourceList = append(resourceList, ResourceData{
-					ID:          r.ID,
-					Type:        r.Type,
-					Region:      r.Region,
-					Risk:        r.Risk,
-					RiskClass:   riskClass,
-					IsGhost:     r.IsGhost,
-					RiskInfo:    r.RiskInfo,
-					GhostInfo:   r.GhostInfo,
-					MonthlyCost: r.MonthlyCost,
+					ID:              r.ID,
+					Type:            r.Type,
+					Service:         r.Service,
+					AccountID:       r.AccountID,
+					Region:          r.Region,
+					Risk:            r.Risk,
+					RiskClass:       riskClass,
+					IsGhost:         r.IsGhost,
+					RiskInfo:        r.RiskInfo,
+					GhostInfo:       r.GhostInfo,
+					Recommendation:  r.Recommendation,
+					ControlRefs:     r.ControlRefs,
+					MonthlyCost:     r.MonthlyCost,
+					SavingsEstimate: r.SavingsEstimate,
 				})
 			}
 			categories = append(categories, CategoryData{
@@ -134,7 +176,11 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
 		"MediumCount":    mediumCount,
 		"GhostCount":     ghostCount,
 		"TotalCost":      totalCost,
+		"TotalSavings":   totalSavings,
 		"Categories":     categories,
+		"Metadata":       meta,
+		"RegionSummary":  strings.Join(meta.Regions, ", "),
+		"Errors":         meta.Errors,
 	}
 
 	tmpl := template.Must(template.New("report").Parse(`<!DOCTYPE html>
@@ -201,6 +247,14 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
         .stat-card.medium .number { color: #e0af68; }
         .stat-card.ghost .number { color: #7aa2f7; }
         .stat-card.cost .number { color: #9ece6a; }
+        .stat-card.savings .number { color: #73daca; }
+        .notice {
+            padding: 20px 30px;
+            background: #2f334d;
+            border-top: 1px solid #414868;
+            border-bottom: 1px solid #414868;
+        }
+        .notice strong { color: #f2c85b; }
         .category {
             padding: 30px;
             border-bottom: 1px solid #414868;
@@ -275,6 +329,23 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
             color: #9ece6a;
             font-weight: 600;
         }
+        .savings {
+            color: #73daca;
+            font-weight: 600;
+        }
+        .detail {
+            color: #a9b1d6;
+            line-height: 1.45;
+        }
+        .control {
+            display: inline-block;
+            margin: 3px 4px 0 0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #414868;
+            color: #c0caf5;
+            font-size: 0.8em;
+        }
         .footer {
             padding: 20px;
             text-align: center;
@@ -314,8 +385,21 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
             </div>
             <div class="stat-card cost">
                 <div class="number">${{printf "%.2f" .TotalCost}}</div>
-                <div class="label">Monthly Cost</div>
+                <div class="label">Estimated Monthly Cost</div>
             </div>
+            <div class="stat-card savings">
+                <div class="number">${{printf "%.2f" .TotalSavings}}</div>
+                <div class="label">Estimated Monthly Savings</div>
+            </div>
+        </div>
+
+        <div class="notice">
+            <strong>Scan:</strong> {{.Metadata.ScanMode}} | <strong>Regions:</strong> {{.Metadata.RegionMode}}{{if .RegionSummary}} ({{.RegionSummary}}){{end}}<br>
+            {{if .Metadata.CostNote}}{{.Metadata.CostNote}}{{else}}Costs are estimated and should be validated against AWS billing data.{{end}}
+            {{if .Errors}}
+            <br><br><strong>Partial failures:</strong>
+            {{range .Errors}}<br>{{.Service}} [{{.Region}}]: {{.Error}}{{end}}
+            {{end}}
         </div>
 
         {{range .Categories}}
@@ -325,17 +409,20 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
                 <thead>
                     <tr>
                         <th>Resource ID</th>
+                        <th>Account</th>
                         <th>Type</th>
                         <th>Region</th>
                         <th>Risk Level</th>
                         <th>Details</th>
                         <th>Monthly Cost</th>
+                        <th>Savings</th>
                     </tr>
                 </thead>
                 <tbody>
                     {{range .Resources}}
                     <tr>
                         <td>{{.ID}}</td>
+                        <td>{{.AccountID}}</td>
                         <td>{{.Type}}</td>
                         <td>{{.Region}}</td>
                         <td>
@@ -343,10 +430,15 @@ func ExportHTML(results map[string][]scanner.Resource) (string, error) {
                             {{if .IsGhost}}<span class="ghost-badge">👻 GHOST</span>{{end}}
                         </td>
                         <td>
-                            {{if .RiskInfo}}{{.RiskInfo}}{{end}}
-                            {{if .GhostInfo}}{{if .RiskInfo}}<br>{{end}}Ghost: {{.GhostInfo}}{{end}}
+                            <div class="detail">
+                                {{if .RiskInfo}}{{.RiskInfo}}{{end}}
+                                {{if .GhostInfo}}{{if .RiskInfo}}<br>{{end}}Ghost: {{.GhostInfo}}{{end}}
+                                {{if .Recommendation}}<br><strong>Action:</strong> {{.Recommendation}}{{end}}
+                                {{if .ControlRefs}}<br>{{range .ControlRefs}}<span class="control">{{.}}</span>{{end}}{{end}}
+                            </div>
                         </td>
                         <td class="cost">${{printf "%.2f" .MonthlyCost}}</td>
+                        <td class="savings">${{printf "%.2f" .SavingsEstimate}}</td>
                     </tr>
                     {{end}}
                 </tbody>

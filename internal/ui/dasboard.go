@@ -70,17 +70,17 @@ var (
 	styleMoney = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
 
 	modalStyle = lipgloss.NewStyle().
-		Width(80).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorGold).
-		Padding(1, 2).
-		Background(colorDark)
+			Width(80).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorGold).
+			Padding(1, 2).
+			Background(colorDark)
 
 	modalTitleStyle = lipgloss.NewStyle().
-		Foreground(colorGold).
-		Bold(true).
-		Underline(true).
-		MarginBottom(1)
+			Foreground(colorGold).
+			Bold(true).
+			Underline(true).
+			MarginBottom(1)
 )
 
 type Model struct {
@@ -92,13 +92,16 @@ type Model struct {
 	inputs   []textinput.Model
 	focusIdx int
 
-	results map[string][]scanner.Resource
+	results    map[string][]scanner.Resource
+	scanErrors []scanner.ScanError
 
-	spinner   spinner.Model
-	startTime time.Time
-	duration  time.Duration
-	scanMode  string
-	statusMsg string
+	spinner     spinner.Model
+	startTime   time.Time
+	duration    time.Duration
+	scanMode    string
+	regionMode  string
+	scanRegions []string
+	statusMsg   string
 
 	resultList     []scanner.Resource
 	resultCursor   int
@@ -107,7 +110,8 @@ type Model struct {
 	showModal bool
 	modalItem scanner.Resource
 
-	totalCost float64
+	totalCost    float64
+	totalSavings float64
 
 	width        int
 	height       int
@@ -119,6 +123,7 @@ type Model struct {
 	searchInput  textinput.Model
 	searchActive bool
 	searchFilter string
+	quickFilter  string
 }
 
 func InitialModel() Model {
@@ -140,6 +145,13 @@ func InitialModel() Model {
 	tVal.Width = 30
 	tVal.PromptStyle = inputStyle
 	tVal.TextStyle = inputStyle
+
+	rVal := textinput.New()
+	rVal.Placeholder = "Custom regions (e.g. us-east-1,eu-west-1)"
+	rVal.CharLimit = 120
+	rVal.Width = 46
+	rVal.PromptStyle = inputStyle
+	rVal.TextStyle = inputStyle
 
 	searchInput := textinput.New()
 	searchInput.Placeholder = "Search resources..."
@@ -189,11 +201,13 @@ func InitialModel() Model {
 		choices:        choices,
 		selected:       sel,
 		cursor:         0,
-		inputs:         []textinput.Model{tKey, tVal},
+		inputs:         []textinput.Model{tKey, tVal, rVal},
 		focusIdx:       0,
 		results:        make(map[string][]scanner.Resource),
+		scanErrors:     []scanner.ScanError{},
 		spinner:        s,
 		scanMode:       "ALL",
+		regionMode:     scanner.RegionModeCurrent,
 		statusMsg:      "",
 		resultCursor:   0,
 		resultViewMode: ViewReport,
@@ -201,6 +215,7 @@ func InitialModel() Model {
 		searchInput:    searchInput,
 		searchActive:   false,
 		searchFilter:   "",
+		quickFilter:    "",
 	}
 }
 
@@ -224,19 +239,41 @@ func includeByMode(mode string, r scanner.Resource) bool {
 }
 
 func (m Model) filterResults(items []scanner.Resource) []scanner.Resource {
+	var quickFiltered []scanner.Resource
+	for _, item := range items {
+		switch m.quickFilter {
+		case "RISK":
+			if !isRiskFinding(item) && item.Risk != "LOW" {
+				continue
+			}
+		case "GHOST":
+			if !item.IsGhost {
+				continue
+			}
+		case "SAVINGS":
+			if item.SavingsEstimate <= 0 {
+				continue
+			}
+		}
+		quickFiltered = append(quickFiltered, item)
+	}
+
 	if m.searchFilter == "" {
-		return items
+		return quickFiltered
 	}
 
 	filter := strings.ToLower(m.searchFilter)
 	var filtered []scanner.Resource
 
-	for _, item := range items {
+	for _, item := range quickFiltered {
 		if strings.Contains(strings.ToLower(item.ID), filter) ||
 			strings.Contains(strings.ToLower(item.Type), filter) ||
 			strings.Contains(strings.ToLower(item.Service), filter) ||
 			strings.Contains(strings.ToLower(item.Risk), filter) ||
-			strings.Contains(strings.ToLower(item.Region), filter) {
+			strings.Contains(strings.ToLower(item.Region), filter) ||
+			strings.Contains(strings.ToLower(item.AccountID), filter) ||
+			strings.Contains(strings.ToLower(item.Recommendation), filter) ||
+			strings.Contains(strings.ToLower(strings.Join(item.ControlRefs, " ")), filter) {
 			filtered = append(filtered, item)
 			continue
 		}
@@ -251,6 +288,55 @@ func (m Model) filterResults(items []scanner.Resource) []scanner.Resource {
 	}
 
 	return filtered
+}
+
+func (m Model) activeConfigInputs() int {
+	if m.regionMode == scanner.RegionModeCustom {
+		return 3
+	}
+	return 2
+}
+
+func parseRegionList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	regions := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		region := strings.TrimSpace(part)
+		if region == "" || seen[region] {
+			continue
+		}
+		seen[region] = true
+		regions = append(regions, region)
+	}
+	return regions
+}
+
+func regionModeLabel(mode string) string {
+	switch mode {
+	case scanner.RegionModeAll:
+		return "ALL ENABLED REGIONS"
+	case scanner.RegionModeCustom:
+		return "CUSTOM REGIONS"
+	default:
+		return "CURRENT AWS REGION"
+	}
+}
+
+func (m Model) selectedRegionSummary() string {
+	if len(m.scanRegions) == 0 {
+		return regionModeLabel(m.regionMode)
+	}
+	if len(m.scanRegions) <= 4 {
+		return strings.Join(m.scanRegions, ", ")
+	}
+	return fmt.Sprintf("%s +%d more", strings.Join(m.scanRegions[:4], ", "), len(m.scanRegions)-4)
+}
+
+func (m Model) resetResultPosition() Model {
+	m.resultCursor = 0
+	m.scrollOffset = 0
+	return m
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -325,6 +411,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.scanMode = "ALL"
 				}
+			case "r", "R":
+				if m.regionMode == scanner.RegionModeCurrent {
+					m.regionMode = scanner.RegionModeAll
+				} else if m.regionMode == scanner.RegionModeAll {
+					m.regionMode = scanner.RegionModeCustom
+				} else {
+					m.regionMode = scanner.RegionModeCurrent
+					if m.focusIdx > 1 {
+						m.focusIdx = 1
+						m.handleInputFocus("current")
+					}
+				}
 			case "a", "A":
 				m.autoSave = !m.autoSave
 			case "up", "k", "shift+tab":
@@ -332,16 +430,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j", "tab":
 				m.handleInputFocus("next")
 			case "enter":
-				if m.focusIdx == len(m.inputs)-1 {
+				if m.focusIdx == m.activeConfigInputs()-1 {
 					m.results = make(map[string][]scanner.Resource)
 					m.resultList = []scanner.Resource{}
+					m.scanErrors = []scanner.ScanError{}
 					m.totalCost = 0
+					m.totalSavings = 0
 					m.statusMsg = ""
 					m.resultCursor = 0
 					m.resultViewMode = ViewReport
 					m.scrollOffset = 0
 					m.searchFilter = ""
 					m.searchActive = false
+					m.quickFilter = ""
+					if m.regionMode == scanner.RegionModeCustom {
+						m.scanRegions = parseRegionList(m.inputs[2].Value())
+					} else {
+						m.scanRegions = nil
+					}
 					m.state = StateScan
 					m.startTime = time.Now()
 					return m, m.startScanCmd()
@@ -382,7 +488,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchInput.SetValue("")
 				return m, nil
 			case "s", "S":
-				filename, err := report.GenerateCSV(m.results)
+				filename, err := report.GenerateCSVWithMetadata(m.results, m.exportMetadata())
 				if err != nil {
 					m.statusMsg = fmt.Sprintf("Error saving CSV: %v", err)
 				} else {
@@ -390,7 +496,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "j", "J":
-				filename, err := report.ExportJSON(m.results)
+				filename, err := report.ExportJSONWithMetadata(m.results, m.exportMetadata())
 				if err != nil {
 					m.statusMsg = fmt.Sprintf("Error saving JSON: %v", err)
 				} else {
@@ -398,14 +504,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "h", "H":
-				filename, err := report.ExportHTML(m.results)
+				filename, err := report.ExportHTMLWithMetadata(m.results, m.exportMetadata())
 				if err != nil {
 					m.statusMsg = fmt.Sprintf("Error saving HTML: %v", err)
 				} else {
 					m.statusMsg = fmt.Sprintf("HTML report saved to %s", filename)
 				}
 				return m, nil
-			
+
 			case "tab":
 				m.resultViewMode++
 				if m.resultViewMode > ViewCost {
@@ -413,7 +519,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.resultCursor = 0
 				m.scrollOffset = 0
-			
+			case "1":
+				m.quickFilter = ""
+				return m.resetResultPosition(), nil
+			case "2":
+				m.quickFilter = "RISK"
+				return m.resetResultPosition(), nil
+			case "3":
+				m.quickFilter = "GHOST"
+				return m.resetResultPosition(), nil
+			case "4":
+				m.quickFilter = "SAVINGS"
+				return m.resetResultPosition(), nil
+
 			case "up", "k":
 				if m.resultCursor > 0 {
 					m.resultCursor--
@@ -440,7 +558,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showModal = true
 				}
 			}
-	}		
+		}
 	case ghostAws.FoundMsg:
 		res := scanner.Resource(msg)
 		if !includeByMode(m.scanMode, res) {
@@ -454,6 +572,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.results[cat] = append(m.results[cat], res)
 		m.resultList = append(m.resultList, res)
 		m.totalCost += res.MonthlyCost
+		m.totalSavings += res.SavingsEstimate
 
 		if m.autoSave && m.streamWriter != nil {
 			if err := m.streamWriter.WriteResource(cat, res); err != nil {
@@ -461,6 +580,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		return m, nil
+
+	case ghostAws.ScanErrorMsg:
+		scanErr := scanner.ScanError(msg)
+		m.scanErrors = append(m.scanErrors, scanErr)
+		m.statusMsg = fmt.Sprintf("Partial failure: %s in %s", scanErr.Service, scanErr.Region)
+		return m, nil
+
+	case ghostAws.StatusMsg:
+		m.statusMsg = string(msg)
 		return m, nil
 
 	case ghostAws.FinishedMsg:
@@ -634,19 +763,21 @@ func (m *Model) handleSelection() {
 }
 
 func (m *Model) handleInputFocus(direction string) {
-	if direction == "prev" {
+	switch direction {
+	case "prev":
 		m.focusIdx--
-	} else {
+	case "next":
 		m.focusIdx++
 	}
-	if m.focusIdx >= len(m.inputs) {
+	activeInputs := m.activeConfigInputs()
+	if m.focusIdx >= activeInputs {
 		m.focusIdx = 0
 	}
 	if m.focusIdx < 0 {
-		m.focusIdx = len(m.inputs) - 1
+		m.focusIdx = activeInputs - 1
 	}
 	for i := range m.inputs {
-		if i == m.focusIdx {
+		if i == m.focusIdx && i < activeInputs {
 			m.inputs[i].Focus()
 		} else {
 			m.inputs[i].Blur()
@@ -658,7 +789,13 @@ func (m Model) startScanCmd() tea.Cmd {
 	return func() tea.Msg {
 		rawKeys := strings.TrimSpace(m.inputs[0].Value())
 		rawVals := strings.TrimSpace(m.inputs[1].Value())
+		regions := []string{}
+		if m.regionMode == scanner.RegionModeCustom {
+			regions = parseRegionList(m.inputs[2].Value())
+		}
 		conf := scanner.AuditConfig{
+			Regions:    regions,
+			RegionMode: m.regionMode,
 			ScanEC2:    m.selected[2],
 			ScanECS:    m.selected[3],
 			ScanLambda: m.selected[4],
@@ -708,11 +845,23 @@ func (m Model) startScanCmd() tea.Cmd {
 }
 
 func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
-	cmds := make([]tea.Cmd, len(m.inputs))
-	for i := range m.inputs {
+	activeInputs := m.activeConfigInputs()
+	cmds := make([]tea.Cmd, activeInputs)
+	for i := 0; i < activeInputs; i++ {
 		m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m Model) exportMetadata() report.ExportMetadata {
+	return report.ExportMetadata{
+		ScanMode:     m.scanMode,
+		RegionMode:   regionModeLabel(m.regionMode),
+		Regions:      append([]string{}, m.scanRegions...),
+		Errors:       append([]scanner.ScanError{}, m.scanErrors...),
+		TotalSavings: m.totalSavings,
+		CostNote:     "Monthly costs and savings are estimates based on known resource shape and static pricing hints.",
+	}
 }
 
 func getCategory(resType string) string {
@@ -775,12 +924,43 @@ func (m Model) renderListContent() string {
 
 	if m.resultViewMode == ViewStats {
 		totalFiltered := len(m.filterResults(m.resultList))
+		critical, high, medium, low, ghost := 0, 0, 0, 0, 0
+		for _, r := range m.resultList {
+			switch r.Risk {
+			case "CRITICAL":
+				critical++
+			case "HIGH":
+				high++
+			case "MEDIUM":
+				medium++
+			case "LOW":
+				low++
+			}
+			if r.IsGhost {
+				ghost++
+			}
+		}
+
 		sb.WriteString(fmt.Sprintf("Total Resources: %d", len(m.resultList)))
 		if m.searchFilter != "" {
 			sb.WriteString(fmt.Sprintf(" (Filtered: %d)", totalFiltered))
 		}
 		sb.WriteString("\n")
-		sb.WriteString(fmt.Sprintf("Total Estimated Spend: $%.2f/mo\n", m.totalCost))
+		sb.WriteString(fmt.Sprintf("Scan Mode: %s\n", m.scanMode))
+		sb.WriteString(fmt.Sprintf("Region Scope: %s\n", m.selectedRegionSummary()))
+		sb.WriteString(fmt.Sprintf("Findings: %d critical, %d high, %d medium, %d low, %d ghost\n", critical, high, medium, low, ghost))
+		sb.WriteString(fmt.Sprintf("Estimated Monthly Spend: $%.2f/mo\n", m.totalCost))
+		sb.WriteString(fmt.Sprintf("Estimated Savings Opportunities: $%.2f/mo\n", m.totalSavings))
+		if len(m.scanErrors) > 0 {
+			sb.WriteString(styleHigh.Render(fmt.Sprintf("\nPartial Failures: %d\n", len(m.scanErrors))))
+			for i, scanErr := range m.scanErrors {
+				if i >= 6 {
+					sb.WriteString(fmt.Sprintf("...and %d more failures\n", len(m.scanErrors)-i))
+					break
+				}
+				sb.WriteString(fmt.Sprintf("- %s [%s]: %s\n", scanErr.Service, scanErr.Region, scanErr.Error))
+			}
+		}
 		return sb.String()
 	}
 
@@ -800,7 +980,11 @@ func (m Model) renderListContent() string {
 			if item.Region != "" {
 				regionInfo = fmt.Sprintf(" [%s]", item.Region)
 			}
-			line := fmt.Sprintf("%s 💰 $%-8.2f %s (%s)%s", cursor, item.MonthlyCost, item.ID, item.Type, regionInfo)
+			savingsInfo := ""
+			if item.SavingsEstimate > 0 {
+				savingsInfo = fmt.Sprintf(" save ~$%.2f/mo", item.SavingsEstimate)
+			}
+			line := fmt.Sprintf("%s 💰 $%-8.2f %s (%s)%s%s", cursor, item.MonthlyCost, item.ID, item.Type, regionInfo, savingsInfo)
 			sb.WriteString(lipgloss.NewStyle().Foreground(colorGreen).Render(line) + "\n")
 		}
 		if len(items) == 0 {
@@ -862,7 +1046,11 @@ func (m Model) renderListContent() string {
 		if item.Region != "" {
 			regionInfo = fmt.Sprintf(" [%s]", item.Region)
 		}
-		line := fmt.Sprintf("%s %s [%s] %s%s%s", cursor, emoji, cleanType, item.ID, extra, regionInfo)
+		savingsInfo := ""
+		if item.SavingsEstimate > 0 {
+			savingsInfo = fmt.Sprintf(" save ~$%.2f/mo", item.SavingsEstimate)
+		}
+		line := fmt.Sprintf("%s %s [%s] %s%s%s%s", cursor, emoji, cleanType, item.ID, extra, regionInfo, savingsInfo)
 		sb.WriteString(styleFor(item).Render(line) + "\n")
 	}
 
@@ -891,6 +1079,9 @@ func (m Model) renderFooterContent() string {
 	} else if m.searchFilter != "" {
 		s += "\n" + lipgloss.NewStyle().Foreground(colorBlue).Render(fmt.Sprintf("Active Filter: %s [/] to change", m.searchFilter)) + "\n"
 	}
+	if m.quickFilter != "" {
+		s += "\n" + lipgloss.NewStyle().Foreground(colorBlue).Render(fmt.Sprintf("Quick Filter: %s [1] All", m.quickFilter)) + "\n"
+	}
 
 	total := len(m.resultList)
 	timeStr := styleTime.Render(fmt.Sprintf("%s", m.duration.Round(time.Millisecond)))
@@ -899,7 +1090,14 @@ func (m Model) renderFooterContent() string {
 		moneyStr := styleMoney.Render(fmt.Sprintf("$%.2f/mo", m.totalCost))
 		s += fmt.Sprintf("  💰 Est. Cost: %s", moneyStr)
 	}
-	s += "\n[↑/↓] Nav  [Enter] Details  [/] Search  [S] CSV  [J] JSON  [H] HTML  [Tab] View  [Esc] Back  [Q] Quit"
+	if m.totalSavings > 0 {
+		saveStr := styleMoney.Render(fmt.Sprintf("$%.2f/mo", m.totalSavings))
+		s += fmt.Sprintf("  Est. Savings: %s", saveStr)
+	}
+	if len(m.scanErrors) > 0 {
+		s += styleHigh.Render(fmt.Sprintf("  Partial failures: %d", len(m.scanErrors)))
+	}
+	s += "\n[↑/↓] Nav  [Enter] Details  [/] Search  [1] All  [2] Risks  [3] Ghosts  [4] Savings  [S/J/H] Export  [Tab] View  [Esc] Back  [Q] Quit"
 	return s
 }
 
@@ -908,6 +1106,8 @@ func (m Model) renderModal() string {
 	s := modalTitleStyle.Render("RESOURCE DETAILS") + "\n\n"
 	s += fmt.Sprintf("ID:     %s\n", r.ID)
 	s += fmt.Sprintf("Type:   %s\n", r.Type)
+	s += fmt.Sprintf("Svc:    %s\n", r.Service)
+	s += fmt.Sprintf("Acct:   %s\n", r.AccountID)
 	s += fmt.Sprintf("Region: %s\n", r.Region)
 	s += fmt.Sprintf("ARN:    %s\n", r.ARN)
 	s += "\n"
@@ -928,7 +1128,17 @@ func (m Model) renderModal() string {
 	} else {
 		s += styleLow.Render("GHOST: NO") + "\n"
 	}
-	s += fmt.Sprintf("\nCost: $%.2f/mo\n", r.MonthlyCost)
+	s += fmt.Sprintf("\nCost: $%.2f/mo estimated\n", r.MonthlyCost)
+	if r.SavingsEstimate > 0 {
+		s += styleMoney.Render(fmt.Sprintf("Savings: ~$%.2f/mo\n", r.SavingsEstimate))
+	}
+	if r.Recommendation != "" {
+		s += "\nRecommendation:\n"
+		s += fmt.Sprintf("%s\n", r.Recommendation)
+	}
+	if len(r.ControlRefs) > 0 {
+		s += fmt.Sprintf("Controls: %s\n", strings.Join(r.ControlRefs, ", "))
+	}
 	s += "\nTags:\n"
 	keys := make([]string, 0, len(r.Tags))
 	for k := range r.Tags {
@@ -974,6 +1184,7 @@ func (m Model) View() string {
 	case StateConfig:
 		s += headerStyle.Render(" 2. AUDIT RULE ") + "\n"
 		s += fmt.Sprintf("SCAN MODE: %s (Press 'm' to toggle)\n", sectionStyle.Render(m.scanMode))
+		s += fmt.Sprintf("REGIONS: %s (Press 'r' to toggle)\n", sectionStyle.Render(regionModeLabel(m.regionMode)))
 
 		autoSaveStatus := "DISABLED"
 		if m.autoSave {
@@ -981,12 +1192,12 @@ func (m Model) View() string {
 		}
 		s += fmt.Sprintf("AUTO-SAVE CSV: %s (Press 'a' to toggle)\n\n", sectionStyle.Render(autoSaveStatus))
 
-		for i := range m.inputs {
+		for i := 0; i < m.activeConfigInputs(); i++ {
 			s += m.inputs[i].View() + "\n"
 		}
-		s += lipgloss.NewStyle().Foreground(colorGray).MarginTop(1).Render("[Up/Down/Tab] Navigate Fields   [Enter] Start Scan")
+		s += lipgloss.NewStyle().Foreground(colorGray).MarginTop(1).Render("[Up/Down/Tab] Navigate Fields   [M] Mode   [R] Regions   [A] Auto-save   [Enter] Start Scan")
 	case StateScan:
-		s += headerStyle.Render(" 3. SCANNING... ") + "\n" + m.spinner.View() + "\n"
+		s += headerStyle.Render(" 3. SCANNING... ") + "\n" + m.spinner.View() + " " + m.statusMsg + "\n"
 	case StateDone:
 		header := m.renderHeaderContent()
 		footer := m.renderFooterContent()

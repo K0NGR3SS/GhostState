@@ -3,6 +3,7 @@ package computing
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -138,6 +139,8 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				// Calculate enhanced cost
 				res.MonthlyCost = s.estimateEC2Cost(ctx, inst)
 
+				var riskIssues []string
+
 				// Ghost detection: Stopped instances
 				if inst.State != nil && inst.State.Name == types.InstanceStateNameStopped {
 					res.IsGhost = true
@@ -147,7 +150,18 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 				// Risk detection: Public IP on running instance
 				if inst.State != nil && inst.State.Name == types.InstanceStateNameRunning && inst.PublicIpAddress != nil {
 					res.Risk = "HIGH"
-					res.RiskInfo = fmt.Sprintf("Public IP: %s", *inst.PublicIpAddress)
+					riskIssues = append(riskIssues, fmt.Sprintf("Public IP: %s", *inst.PublicIpAddress))
+				}
+
+				if inst.MetadataOptions == nil || inst.MetadataOptions.HttpTokens != types.HttpTokensStateRequired {
+					if res.Risk == "SAFE" {
+						res.Risk = "MEDIUM"
+					}
+					riskIssues = append(riskIssues, "IMDSv2 not required")
+				}
+
+				if len(riskIssues) > 0 {
+					res.RiskInfo = strings.Join(riskIssues, "; ")
 				}
 
 				// Apply audit rule filter

@@ -45,6 +45,7 @@ const (
 	CostStepFuncState = 0.000025
 
 	CostEBSGP3       = 0.08
+	CostEBSGP2       = 0.10
 	CostEBSIO2       = 0.125
 	CostSnapshot     = 0.05
 	CostS3Standard   = 0.023
@@ -183,6 +184,12 @@ func EstimateCost(serviceType string, instanceType string, metric float64) float
 	if strings.Contains(svc, "ebs") {
 		if metric <= 0 {
 			metric = 20
+		}
+		if strings.Contains(iType, "gp2") {
+			return metric * CostEBSGP2
+		}
+		if strings.Contains(iType, "io1") || strings.Contains(iType, "io2") {
+			return metric * CostEBSIO2
 		}
 		return metric * CostEBSGP3
 	}

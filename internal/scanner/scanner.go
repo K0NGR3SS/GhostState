@@ -3,25 +3,41 @@ package scanner
 import "context"
 
 type Resource struct {
-	Type      string
-	ID        string
-	ARN       string
-	
+	Type string
+	ID   string
+	ARN  string
+
 	// Fields for pricing and metadata
-	Service   string 
+	Service   string
 	Status    string
 	Size      float64
-	Region    string  // NEW: Track which region resource is in
-	
-	Risk      string
-	RiskInfo  string
-	GhostInfo string
-	Info      string
+	Region    string // NEW: Track which region resource is in
+	AccountID string
+
+	Risk           string
+	RiskInfo       string
+	GhostInfo      string
+	Info           string
+	Recommendation string
+	ControlRefs    []string
 
 	Tags map[string]string
 
-	IsGhost     bool
-	MonthlyCost float64
+	IsGhost         bool
+	MonthlyCost     float64
+	SavingsEstimate float64
+}
+
+const (
+	RegionModeCurrent = "CURRENT"
+	RegionModeAll     = "ALL_ENABLED"
+	RegionModeCustom  = "CUSTOM"
+)
+
+type ScanError struct {
+	Service string `json:"service"`
+	Region  string `json:"region"`
+	Error   string `json:"error"`
 }
 
 type AuditRule struct {
@@ -33,7 +49,8 @@ type AuditRule struct {
 
 type AuditConfig struct {
 	TargetRule AuditRule
-	Regions    []string  // List of regions to scan (empty = current region only)
+	Regions    []string // List of regions to scan (empty = current region only)
+	RegionMode string
 
 	ScanEC2    bool
 	ScanECS    bool

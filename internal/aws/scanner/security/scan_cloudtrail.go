@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,10 +38,11 @@ func (s *TrailScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scan
 			Name: trail.TrailARN,
 		})
 
+		var riskIssues []string
 		if err == nil {
 			if !aws.ToBool(status.IsLogging) {
 				res.Risk = "CRITICAL"
-				res.RiskInfo = "Logging is STOPPED"
+				riskIssues = append(riskIssues, "Logging is STOPPED")
 			} else {
 				desc, err := s.client.GetTrail(ctx, &cloudtrail.GetTrailInput{
 					Name: trail.TrailARN,
@@ -48,10 +50,31 @@ func (s *TrailScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scan
 				if err == nil && desc.Trail != nil {
 					if !aws.ToBool(desc.Trail.LogFileValidationEnabled) {
 						res.Risk = "MEDIUM"
-						res.RiskInfo = "Log Validation Disabled"
+						riskIssues = append(riskIssues, "Log Validation Disabled")
+					}
+					if !aws.ToBool(desc.Trail.IsMultiRegionTrail) {
+						if res.Risk == "SAFE" {
+							res.Risk = "HIGH"
+						}
+						riskIssues = append(riskIssues, "Not Multi-Region")
+					}
+					if aws.ToString(desc.Trail.KmsKeyId) == "" {
+						if res.Risk == "SAFE" {
+							res.Risk = "MEDIUM"
+						}
+						riskIssues = append(riskIssues, "KMS Encryption Not Configured")
+					}
+					if aws.ToString(desc.Trail.CloudWatchLogsLogGroupArn) == "" {
+						if res.Risk == "SAFE" {
+							res.Risk = "MEDIUM"
+						}
+						riskIssues = append(riskIssues, "CloudWatch Logs Integration Missing")
 					}
 				}
 			}
+		}
+		if len(riskIssues) > 0 {
+			res.RiskInfo = strings.Join(riskIssues, "; ")
 		}
 
 		if scanner.MatchesRule(res.Tags, rule) {
