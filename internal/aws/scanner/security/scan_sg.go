@@ -76,14 +76,14 @@ func getRiskLevel(port int32) string {
 // Check if a port range contains a critical port
 func (s *SGScanner) checkCriticalPorts(fromPort, toPort int32) []string {
 	var findings []string
-	
+
 	// Check each critical port
 	for port, service := range criticalPorts {
 		if port >= fromPort && port <= toPort {
 			findings = append(findings, fmt.Sprintf("%s (%d)", service, port))
 		}
 	}
-	
+
 	return findings
 }
 
@@ -105,129 +105,131 @@ func (s *SGScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner
 		}
 	}
 
-	out, err := s.Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, sg := range out.SecurityGroups {
-		sgID := aws.ToString(sg.GroupId)
-		sgName := aws.ToString(sg.GroupName)
-
-		res := scanner.Resource{
-			ID:      fmt.Sprintf("%s (%s)", sgName, sgID),
-			Service: "Security Group",
-			Type:    "Security Group",
-			Tags:    map[string]string{},
-			Risk:    "SAFE",
+	pages := ec2.NewDescribeSecurityGroupsPaginator(s.Client, &ec2.DescribeSecurityGroupsInput{})
+	for pages.HasMorePages() {
+		out, err := pages.NextPage(ctx)
+		if err != nil {
+			return results, err
 		}
+		for _, sg := range out.SecurityGroups {
+			sgID := aws.ToString(sg.GroupId)
+			sgName := aws.ToString(sg.GroupName)
 
-		for _, t := range sg.Tags {
-			if t.Key != nil && t.Value != nil {
-				res.Tags[*t.Key] = *t.Value
+			res := scanner.Resource{
+				ID:      fmt.Sprintf("%s (%s)", sgName, sgID),
+				Service: "Security Group",
+				Type:    "Security Group",
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
-		}
 
-		if sgName != "default" && !usedSG[sgID] {
-			res.IsGhost = true
-			res.GhostInfo = "Unused (not attached to any ENI)"
-		}
-
-		// Risk analysis: ingress open to world
-		var allFindings []string
-		highestRisk := "SAFE"
-
-		for _, perm := range sg.IpPermissions {
-			openWorld := false
-			
-			// Check IPv4 ranges
-			for _, ipRange := range perm.IpRanges {
-				if ipRange.CidrIp != nil && *ipRange.CidrIp == "0.0.0.0/0" {
-					openWorld = true
-					break
+			for _, t := range sg.Tags {
+				if t.Key != nil && t.Value != nil {
+					res.Tags[*t.Key] = *t.Value
 				}
 			}
-			
-			// Check IPv6 ranges (often forgotten!)
-			if !openWorld {
-				for _, ipv6Range := range perm.Ipv6Ranges {
-					if ipv6Range.CidrIpv6 != nil && *ipv6Range.CidrIpv6 == "::/0" {
+
+			if sgName != "default" && !usedSG[sgID] {
+				res.IsGhost = true
+				res.GhostInfo = "Unused (not attached to any ENI)"
+			}
+
+			// Risk analysis: ingress open to world
+			var allFindings []string
+			highestRisk := "SAFE"
+
+			for _, perm := range sg.IpPermissions {
+				openWorld := false
+
+				// Check IPv4 ranges
+				for _, ipRange := range perm.IpRanges {
+					if ipRange.CidrIp != nil && *ipRange.CidrIp == "0.0.0.0/0" {
 						openWorld = true
 						break
 					}
 				}
-			}
 
-			if !openWorld {
-				continue
-			}
-
-			fromPort := int32(0)
-			if perm.FromPort != nil {
-				fromPort = *perm.FromPort
-			}
-			toPort := int32(65535)
-			if perm.ToPort != nil {
-				toPort = *perm.ToPort
-			}
-
-			// Special case: all ports open
-			if fromPort == 0 && toPort == 65535 {
-				allFindings = append(allFindings, "ALL PORTS (0-65535)")
-				highestRisk = "CRITICAL"
-				continue
-			}
-
-			// Check for critical ports in this range
-			criticalFound := s.checkCriticalPorts(fromPort, toPort)
-			
-			if len(criticalFound) > 0 {
-				for _, finding := range criticalFound {
-					allFindings = append(allFindings, finding)
-					
-					// Extract port number to determine risk
-					var port int32
-					fmt.Sscanf(finding, "%*s (%d)", &port)
-					portRisk := getRiskLevel(port)
-					
-					// Update to highest risk level found
-					if portRisk == "CRITICAL" {
-						highestRisk = "CRITICAL"
-					} else if portRisk == "HIGH" && highestRisk != "CRITICAL" {
-						highestRisk = "HIGH"
-					} else if portRisk == "MEDIUM" && highestRisk == "SAFE" {
-						highestRisk = "MEDIUM"
+				// Check IPv6 ranges (often forgotten!)
+				if !openWorld {
+					for _, ipv6Range := range perm.Ipv6Ranges {
+						if ipv6Range.CidrIpv6 != nil && *ipv6Range.CidrIpv6 == "::/0" {
+							openWorld = true
+							break
+						}
 					}
 				}
-			} else {
-				// Non-critical port range open
-				allFindings = append(allFindings, fmt.Sprintf("Port %d-%d", fromPort, toPort))
-				if highestRisk == "SAFE" {
-					highestRisk = "LOW"
+
+				if !openWorld {
+					continue
+				}
+
+				fromPort := int32(0)
+				if perm.FromPort != nil {
+					fromPort = *perm.FromPort
+				}
+				toPort := int32(65535)
+				if perm.ToPort != nil {
+					toPort = *perm.ToPort
+				}
+
+				// Special case: all ports open
+				if fromPort == 0 && toPort == 65535 {
+					allFindings = append(allFindings, "ALL PORTS (0-65535)")
+					highestRisk = "CRITICAL"
+					continue
+				}
+
+				// Check for critical ports in this range
+				criticalFound := s.checkCriticalPorts(fromPort, toPort)
+
+				if len(criticalFound) > 0 {
+					for _, finding := range criticalFound {
+						allFindings = append(allFindings, finding)
+
+						// Extract port number to determine risk
+						var port int32
+						fmt.Sscanf(finding, "%*s (%d)", &port)
+						portRisk := getRiskLevel(port)
+
+						// Update to highest risk level found
+						if portRisk == "CRITICAL" {
+							highestRisk = "CRITICAL"
+						} else if portRisk == "HIGH" && highestRisk != "CRITICAL" {
+							highestRisk = "HIGH"
+						} else if portRisk == "MEDIUM" && highestRisk == "SAFE" {
+							highestRisk = "MEDIUM"
+						}
+					}
+				} else {
+					// Non-critical port range open
+					allFindings = append(allFindings, fmt.Sprintf("Port %d-%d", fromPort, toPort))
+					if highestRisk == "SAFE" {
+						highestRisk = "LOW"
+					}
 				}
 			}
-		}
 
-		// Update resource with findings
-		if len(allFindings) > 0 {
-			res.Risk = highestRisk
-			
-			// Build detailed risk info
-			if len(allFindings) <= 3 {
-				res.RiskInfo = fmt.Sprintf("Open to World: %s", strings.Join(allFindings, ", "))
-			} else {
-				// Too many findings, summarize
-				res.RiskInfo = fmt.Sprintf("Open to World: %s and %d more ports", 
-					strings.Join(allFindings[:3], ", "), 
-					len(allFindings)-3)
+			// Update resource with findings
+			if len(allFindings) > 0 {
+				res.Risk = highestRisk
+
+				// Build detailed risk info
+				if len(allFindings) <= 3 {
+					res.RiskInfo = fmt.Sprintf("Open to World: %s", strings.Join(allFindings, ", "))
+				} else {
+					// Too many findings, summarize
+					res.RiskInfo = fmt.Sprintf("Open to World: %s and %d more ports",
+						strings.Join(allFindings[:3], ", "),
+						len(allFindings)-3)
+				}
+			}
+
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
 			}
 		}
 
-		if scanner.MatchesRule(res.Tags, rule) {
-			results = append(results, res)
-		}
 	}
-
 	return results, nil
 }

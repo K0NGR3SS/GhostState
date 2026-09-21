@@ -43,6 +43,8 @@ func EnrichResource(r scanner.Resource) scanner.Resource {
 
 	if r.Recommendation == "" {
 		switch {
+		case r.Risk == "UNKNOWN":
+			r.Recommendation = "Review scan errors and grant the required read permissions, then rerun the unavailable checks."
 		case containsAny(service, "security group") && containsAny(details, "open to world"):
 			r.Recommendation = "Restrict inbound rules to trusted CIDRs, remove unused wide-open rules, or move access behind a VPN/bastion."
 			r.ControlRefs = appendUniqueRefs(r.ControlRefs, "SecurityHub EC2.19", "AWS Config restricted-ssh")

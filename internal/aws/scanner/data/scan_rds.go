@@ -24,7 +24,7 @@ func (s *RDSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, db := range out.DBInstances {

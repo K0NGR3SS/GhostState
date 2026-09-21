@@ -23,17 +23,17 @@ func (s *DynamoDBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]s
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, tableName := range out.TableNames {
 			res := scanner.Resource{
-				ID:   tableName,
+				ID:      tableName,
 				Service: "DynamoDB",
-				Status: "Active",
-				Type: "DynamoDB Table",
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				Status:  "Active",
+				Type:    "DynamoDB Table",
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			desc, err := s.Client.DescribeContinuousBackups(ctx, &dynamodb.DescribeContinuousBackupsInput{
@@ -42,7 +42,7 @@ func (s *DynamoDBScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]s
 
 			if err == nil {
 				cb := desc.ContinuousBackupsDescription
-				if cb.PointInTimeRecoveryDescription == nil ||
+				if cb == nil || cb.PointInTimeRecoveryDescription == nil ||
 					cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus == "DISABLED" {
 					res.Risk = "MEDIUM"
 					res.RiskInfo = "Backups Disabled"

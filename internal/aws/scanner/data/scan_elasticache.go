@@ -23,7 +23,7 @@ func (s *ElastiScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sca
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, rg := range out.ReplicationGroups {

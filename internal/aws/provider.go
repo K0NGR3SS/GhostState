@@ -27,16 +27,16 @@ type Provider struct {
 	tagCache  *cache.TagCache
 }
 
-func NewProvider(cfg aws.Config) (*Provider, error) {
+func NewProvider(ctx context.Context, cfg aws.Config) (*Provider, error) {
 	stsClient := sts.NewFromConfig(cfg)
-	identity, err := stsClient.GetCallerIdentity(context.TODO(), &sts.GetCallerIdentityInput{})
+	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AWS identity: %w", err)
 	}
 
 	return &Provider{
 		cfg:       cfg,
-		accountID: *identity.Account,
+		accountID: aws.ToString(identity.Account),
 		region:    cfg.Region,
 		tagCache:  cache.NewTagCache(5 * time.Minute),
 	}, nil
@@ -55,9 +55,11 @@ func (p *Provider) resolveRegions(ctx context.Context, conf scanner.AuditConfig)
 		}
 		return regions, nil
 	case scanner.RegionModeCustom:
-		if len(conf.Regions) > 0 {
-			return conf.Regions, nil
+		regions := addUniqueStrings(conf.Regions)
+		if len(regions) == 0 {
+			return nil, fmt.Errorf("custom region scope requires at least one region")
 		}
+		return regions, nil
 	}
 
 	if len(conf.Regions) > 0 {
@@ -110,42 +112,45 @@ func (p *Provider) GetAllRegions(ctx context.Context) ([]string, error) {
 	return regions, nil
 }
 
-func (p *Provider) scanRegion(ctx context.Context, region string, includeGlobal bool, conf scanner.AuditConfig) ([]scanner.Resource, []scanner.ScanError) {
+func (p *Provider) scanRegion(ctx context.Context, region string, includeGlobal bool, conf scanner.AuditConfig, progress ScanProgress) ([]scanner.Resource, []scanner.ScanError) {
 	// Create region-specific config
 	regionalCfg := p.cfg.Copy()
 	regionalCfg.Region = region
 
 	// Create worker pool with 10 concurrent workers
-	workerPool := pool.NewWorkerPool(10)
+	workerPool := pool.NewWorkerPool(ctx, 10)
 	workerPool.Start()
 
-	resultsChan := make(chan scanner.Resource, 1000)
-	var wg sync.WaitGroup
-	var errMu sync.Mutex
+	var mu sync.Mutex
+	var results []scanner.Resource
 	var scanErrors []scanner.ScanError
 
-	// Helper function to submit scanner tasks to worker pool
-	submit := func(serviceName string, s interface {
-		Scan(context.Context, scanner.AuditRule) ([]scanner.Resource, error)
-	}) {
-		wg.Add(1)
+	submit := func(serviceName string, s scanner.Scanner) {
 		workerPool.Submit(func(ctx context.Context) error {
-			defer wg.Done()
 			res, err := s.Scan(ctx, conf.TargetRule)
-			if err == nil {
-				for _, r := range res {
-					r.Region = region // Tag resource with region
-					r.AccountID = p.accountID
-					resultsChan <- r
+			// A failed later page must not discard resources already discovered.
+			mu.Lock()
+			defer mu.Unlock()
+			for _, r := range res {
+				if r.Region == "" {
+					r.Region = region
 				}
-			} else {
-				errMu.Lock()
-				scanErrors = append(scanErrors, scanner.ScanError{
-					Service: serviceName,
-					Region:  region,
-					Error:   err.Error(),
-				})
-				errMu.Unlock()
+				r.AccountID = p.accountID
+				if r.MonthlyCost == 0 {
+					r.MonthlyCost = EstimateCost(r.Service, r.Type, r.Size)
+				}
+				r = EnrichResource(r)
+				results = append(results, r)
+				if progress.Resource != nil {
+					progress.Resource(r)
+				}
+			}
+			if err != nil {
+				scanErr := scanner.ScanError{Service: serviceName, Region: region, Error: err.Error()}
+				scanErrors = append(scanErrors, scanErr)
+				if progress.Error != nil {
+					progress.Error(scanErr)
+				}
 			}
 			return nil
 		})
@@ -231,27 +236,27 @@ func (p *Provider) scanRegion(ctx context.Context, region string, includeGlobal 
 		submit("CloudWatch", monitoring.NewCloudWatchScanner(regionalCfg))
 	}
 
-	// Wait for all scan tasks to complete, then close channels
-	go func() {
-		wg.Wait()
-		workerPool.Wait()
-		close(resultsChan)
-	}()
-
-	// Collect results
-	var results []scanner.Resource
-	for res := range resultsChan {
-		if res.MonthlyCost == 0 {
-			res.MonthlyCost = EstimateCost(res.Service, res.Type, res.Size)
-		}
-		res = EnrichResource(res)
-		results = append(results, res)
-	}
+	workerPool.Wait()
 
 	return results, scanErrors
 }
 
+// ScanProgress callbacks run as services finish. Resource and Error callbacks may
+// run concurrently across regions; callers must make them concurrency-safe.
+type ScanProgress struct {
+	Resource func(scanner.Resource)
+	Error    func(scanner.ScanError)
+	Regions  func([]string)
+}
+
 func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]scanner.Resource, []scanner.ScanError, error) {
+	return p.ScanAllWithProgress(ctx, conf, ScanProgress{})
+}
+
+func (p *Provider) ScanAllWithProgress(ctx context.Context, conf scanner.AuditConfig, progress ScanProgress) ([]scanner.Resource, []scanner.ScanError, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	// Clean expired cache entries before scan
 	p.tagCache.CleanExpired()
 
@@ -260,26 +265,31 @@ func (p *Provider) ScanAll(ctx context.Context, conf scanner.AuditConfig) ([]sca
 		return nil, nil, err
 	}
 	regions = addUniqueStrings(regions)
+	if len(regions) == 0 {
+		return nil, nil, fmt.Errorf("no enabled regions found")
+	}
+	if progress.Regions != nil {
+		progress.Regions(append([]string(nil), regions...))
+	}
 
 	var allResults []scanner.Resource
 	var allErrors []scanner.ScanError
 	var mu sync.Mutex
 
-	// Scan each region concurrently
-	var wg sync.WaitGroup
+	// Bound regional concurrency as well as per-region service concurrency.
+	regionPool := pool.NewWorkerPool(ctx, 3)
 	for idx, region := range regions {
 		includeGlobal := idx == 0 && hasGlobalScanners(conf)
-		wg.Add(1)
-		go func(r string, global bool) {
-			defer wg.Done()
-			results, scanErrors := p.scanRegion(ctx, r, global, conf)
+		regionPool.Submit(func(ctx context.Context) error {
+			results, scanErrors := p.scanRegion(ctx, region, includeGlobal, conf, progress)
 			mu.Lock()
 			allResults = append(allResults, results...)
 			allErrors = append(allErrors, scanErrors...)
 			mu.Unlock()
-		}(region, includeGlobal)
+			return nil
+		})
 	}
 
-	wg.Wait()
-	return allResults, allErrors, nil
+	regionPool.Wait()
+	return allResults, allErrors, ctx.Err()
 }

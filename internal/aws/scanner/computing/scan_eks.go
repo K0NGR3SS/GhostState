@@ -23,7 +23,7 @@ func (s *EKSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, clusterName := range page.Clusters {

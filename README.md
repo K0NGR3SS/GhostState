@@ -5,7 +5,7 @@
 ![AWS](https://img.shields.io/badge/AWS-SDK_v2-232F3E?style=flat&logo=amazon-aws)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Last Updated:** June 23, 2026
+> **Last Updated:** September 21, 2026
 
 GhostState is an interactive CLI security, governance, and cost-analysis tool for AWS. It scans your infrastructure to identify "Ghost" resources (shadow IT/unused assets), "Risk" resources (security vulnerabilities), and estimates your monthly cloud spend in real-time.
 
@@ -13,10 +13,20 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 
 ---
 
+## Reliability improvements
+
+- **Cancellation and progress:** Service results arrive as each service finishes. Press `Esc` during a scan to cancel and retain partial results; `Ctrl+C` exits and closes active report files. A canceled scan is marked incomplete in exports.
+- **Complete inventory pagination:** S3, IAM, VPC, security groups, Route53, and CloudTrail follow inventory continuation tokens. Scanners retain resources from successful pages if a later page fails.
+- **S3 regional checks:** Bucket checks use the region returned by the paginated inventory. Permission failures appear as scan errors, not claims that a bucket is public or unencrypted. `UNKNOWN` means the checks could not establish a risk level; confirmed findings remain visible alongside unavailable checks.
+- **Safer exports:** Each report gets a unique filename and owner-only permissions. CSV exports check buffered writes and neutralize formula-like resource text. Auto-save includes scan metadata and partial failures when the scan finishes.
+- **Editable setup fields:** Use `Ctrl+O` for scan mode, `Ctrl+R` for region scope, and `Ctrl+S` for auto-save. Letters, including uppercase letters, remain available for tag values and region names. Use arrows or Tab to change fields.
+
+CSV retains the resource columns and appends a `Notes` column for unavailable checks. Metadata and error rows use the same column count: filter `Category` values `SCAN METADATA` and `SCAN ERROR` when importing resource rows into another tool. JSON and HTML also include scan metadata and partial errors. All pricing remains approximate and should be checked against your AWS billing data.
+
 ## New Features for v1.4
 
 ### **Real Multi-Region Scanning**
-- **Region Scope Selector:** Press `R` in setup to scan the current AWS region, all enabled regions, or a custom comma-separated region list
+- **Region Scope Selector:** Press `Ctrl+R` in setup to scan the current AWS region, all enabled regions, or a custom comma-separated region list
 - **Global Services Included Once:** S3, IAM, CloudFront, and Route53 are scanned once per run even when your active AWS region is not `us-east-1`
 - **Partial Failure Visibility:** Per-service/per-region scan failures are shown in the TUI and included in exports without discarding successful results
 
@@ -48,7 +58,7 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 ## Earlier Features from v1.2
 
 ### **Advanced Cost Analysis**
-- **Real-time Cost Estimation:** Accurate monthly cost estimates for EC2 (including EBS volumes and public IPs), RDS (with storage), and all major services
+- **Real-time Cost Estimation:** Approximate monthly cost estimates for EC2 (including EBS volumes and public IPs), RDS (with storage), and all major services
 - **Cost Drill-Down View:** Dedicated view to sort resources by price and identify top spenders
 - **Stopped Instance Tracking:** Shows ongoing costs for stopped EC2 instances (EBS + IP charges)
 - **Cost-Aware Scanning:** Auto-save CSV includes per-resource monthly cost breakdowns
@@ -64,16 +74,15 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 - **HTML Export** (`H`): Beautiful, styled reports with interactive tables and statistics dashboard
 
 ### **Performance & Scalability**
-- **Worker Pool Architecture:** Controlled concurrency with 10-worker pools per region
-- **Tag Caching:** 5-minute TTL cache reduces redundant API calls by ~60%
-- **Streaming Auto-Save:** Toggle with `A` to save results incrementally (press `a` in config screen)
+- **Worker Pool Architecture:** Up to 3 regions concurrently, each with at most 10 service workers
+- **Streaming Auto-Save:** Toggle with `Ctrl+S` in setup to save results as each service finishes
 - **Multi-Region Support:** Scan across all AWS regions with proper global service deduplication
 
 ### **Expanded Security Checks**
 - **27+ Critical Ports:** Now detects MySQL, PostgreSQL, Redis, MongoDB, Elasticsearch, and more
 - **IPv6 Detection:** Identifies security groups open to `::/0` (often overlooked!)
 - **S3 Versioning:** Alerts on buckets without versioning enabled
-- **S3 Encryption:** Detects unencrypted S3 buckets
+- **S3 Encryption:** Inspects default encryption configuration and reports unavailable checks
 - **S3 Logging:** Warns when access logging is disabled
 - **IAM Access Keys:** Tracks key age and alerts on keys >90 days old
 - **IAM MFA Status:** Identifies users without MFA enabled
@@ -93,7 +102,7 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 ### Interactive Dashboard (TUI)
 - **Live Navigation:** Navigate through audit results using arrow keys (`↑`, `↓`), cycle views (Report/Stats/Cost) with `Tab`, and go back with `Esc`
 - **Drill-Down Inspector:** Press `Enter` on any resource to open a **Detail Modal**, viewing raw tags, full ARNs, cost breakdowns, and risk explanations
-- **Region Control:** Press `R` in setup to switch between current region, all enabled regions, and custom regions
+- **Region Control:** Press `Ctrl+R` in setup to switch between current region, all enabled regions, and custom regions
 - **Quick Result Filters:** Press `1` for all results, `2` for risk findings, `3` for ghost resources, and `4` for savings opportunities
 - **Smart Scan Modes:**
   - **ALL:** Displays the full infrastructure inventory
@@ -109,7 +118,7 @@ It features a robust, hexagonal architecture and a terminal-based dashboard (TUI
 - **CSV Export (`S`):** Compliance-ready reports with all resource details
 - **JSON Export (`J`):** API-friendly format for automation and tooling
 - **HTML Export (`H`):** Executive-ready reports with visual statistics
-- **Streaming Auto-Save:** Enable with `A` in config to save results as they're discovered
+- **Streaming Auto-Save:** Enable with `Ctrl+S` in config to save results as they're discovered
 
 ---
 
@@ -120,7 +129,7 @@ GhostState performs comprehensive audits across your AWS infrastructure:
 | Service | Risk Checks |
 |---------|-------------|
 | **EC2** | Public IP detection, Stopped instances (ongoing costs), Enhanced cost calculation with EBS volumes |
-| **S3** | Public Access detection (HIGH), Versioning disabled (MEDIUM), Encryption disabled (MEDIUM), Logging disabled (LOW) |
+| **S3** | Public Access detection (HIGH), Versioning disabled (MEDIUM), Unavailable encryption checks reported separately, Logging disabled (LOW) |
 | **IAM** | Stale Passwords (>90 days), Access Keys >90 days old (HIGH), No MFA enabled (MEDIUM), Multiple access keys (LOW), No Console Login (Ghost) |
 | **Security Groups** | **27 Critical Ports** including SSH (22), RDP (3389), MySQL (3306), PostgreSQL (5432), MongoDB (27017), Redis (6379), Elasticsearch (9200-9300), and more. IPv4 and IPv6 detection. |
 | **RDS** | Public Access (HIGH), Storage Encryption Disabled (MEDIUM), Multi-AZ cost tracking |
@@ -142,7 +151,7 @@ GhostState performs comprehensive audits across your AWS infrastructure:
 
 ## Supported Services
 
-GhostState audits **27 AWS services** across all categories:
+GhostState includes **22 service scanners** across all categories:
 
 ### Computing
 - **EC2** Instances (with EBS volume cost tracking)
@@ -191,3 +200,15 @@ git clone https://github.com/K0NGR3SS/GhostState.git
 cd GhostState
 go mod tidy
 go run cmd/ghoststate/main.go
+
+
+## Development checks
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./cmd/ghoststate
+```
+
+The tests use mocked AWS HTTP responses and do not require credentials or access to a live account. They cover scan cancellation, pagination, partial-result retention, setup input, streaming auto-save, and export safety.

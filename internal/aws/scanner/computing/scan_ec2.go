@@ -110,7 +110,7 @@ func (s *EC2Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, r := range out.Reservations {

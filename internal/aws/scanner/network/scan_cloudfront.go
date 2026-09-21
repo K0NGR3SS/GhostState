@@ -23,7 +23,7 @@ func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		if out.DistributionList == nil {
@@ -32,13 +32,13 @@ func (s *CloudFrontScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([
 
 		for _, d := range out.DistributionList.Items {
 			res := scanner.Resource{
-				ID:   aws.ToString(d.DomainName),
-				ARN:  aws.ToString(d.ARN),
+				ID:      aws.ToString(d.DomainName),
+				ARN:     aws.ToString(d.ARN),
 				Service: "CloudFront",
-				Status: aws.ToString(d.Status),
-				Type: "CloudFront Dist",
-				Tags: map[string]string{},
-				Risk: "SAFE",
+				Status:  aws.ToString(d.Status),
+				Type:    "CloudFront Dist",
+				Tags:    map[string]string{},
+				Risk:    "SAFE",
 			}
 
 			if d.ARN != nil {

@@ -46,7 +46,7 @@ func (s *ECSScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanne
 			Include:  []ecstypes.ClusterField{ecstypes.ClusterFieldTags},
 		})
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, c := range desc.Clusters {

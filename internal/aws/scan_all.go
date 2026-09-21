@@ -2,7 +2,6 @@ package aws
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -11,66 +10,48 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// FoundMsg carries the full resource object
+// FoundMsg carries the full resource object.
 type FoundMsg scanner.Resource
 
 // ScanErrorMsg reports a scanner failure without aborting the whole scan.
 type ScanErrorMsg scanner.ScanError
 
-// StatusMsg reports scan setup/progress text to the UI.
 type StatusMsg string
 
-// FinishedMsg signals completion
+// RegionsMsg reports the resolved scope, including current/all-region selections.
+type RegionsMsg []string
+
 type FinishedMsg struct{}
 
-func ScanAll(p *tea.Program, conf scanner.AuditConfig) {
-	p.Send(StatusMsg("Loading AWS configuration..."))
-
-	// Load config with retry logic
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+// ScanAll sends results as services finish. The caller owns cancellation and must
+// provide a concurrency-safe send function that unblocks when ctx is canceled.
+func ScanAll(ctx context.Context, send func(tea.Msg), conf scanner.AuditConfig) {
+	defer send(FinishedMsg{})
+	send(StatusMsg("Loading AWS configuration..."))
+	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRetryer(func() aws.Retryer {
 			return retry.AddWithMaxAttempts(retry.NewStandard(), 5)
 		}),
 	)
 	if err != nil {
-		// Create an "Error Resource" to display the failure
-		p.Send(FoundMsg(scanner.Resource{
-			ID:   fmt.Sprintf("Error loading AWS config: %v", err),
-			Type: "❌ FATAL ERROR",
-			Risk: "CRITICAL",
-		}))
-		p.Send(FinishedMsg{})
+		send(ScanErrorMsg{Service: "AWS configuration", Error: err.Error()})
 		return
 	}
 
-	p.Send(StatusMsg("Identifying AWS account..."))
-	provider, err := NewProvider(cfg)
+	send(StatusMsg("Identifying AWS account..."))
+	provider, err := NewProvider(ctx, cfg)
 	if err != nil {
-		p.Send(FoundMsg(scanner.Resource{
-			ID:   fmt.Sprintf("Error initializing provider: %v", err),
-			Type: "❌ FATAL ERROR",
-			Risk: "CRITICAL",
-		}))
-		p.Send(FinishedMsg{})
+		send(ScanErrorMsg{Service: "AWS identity", Region: cfg.Region, Error: err.Error()})
 		return
 	}
 
-	p.Send(StatusMsg("Scanning selected services..."))
-	results, scanErrors, err := provider.ScanAll(context.TODO(), conf)
+	send(StatusMsg("Scanning selected services..."))
+	_, _, err = provider.ScanAllWithProgress(ctx, conf, ScanProgress{
+		Resource: func(r scanner.Resource) { send(FoundMsg(r)) },
+		Error:    func(e scanner.ScanError) { send(ScanErrorMsg(e)) },
+		Regions:  func(regions []string) { send(RegionsMsg(regions)) },
+	})
 	if err != nil {
-		p.Send(FoundMsg(scanner.Resource{
-			ID:   fmt.Sprintf("Scan Error: %v", err),
-			Type: "❌ SCAN ERROR",
-			Risk: "HIGH",
-		}))
+		send(ScanErrorMsg{Service: "Scan", Error: err.Error()})
 	}
-
-	for _, scanErr := range scanErrors {
-		p.Send(ScanErrorMsg(scanErr))
-	}
-
-	for _, res := range results {
-		p.Send(FoundMsg(res))
-	}
-	p.Send(FinishedMsg{})
 }

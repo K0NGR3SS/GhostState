@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +27,7 @@ type ResourceData struct {
 	IsGhost         bool
 	RiskInfo        string
 	GhostInfo       string
+	Info            string
 	Recommendation  string
 	ControlRefs     []string
 	MonthlyCost     float64
@@ -46,13 +47,15 @@ func ExportJSON(results map[string][]scanner.Resource) (string, error) {
 	return ExportJSONWithMetadata(results, ExportMetadata{})
 }
 
-func ExportJSONWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (string, error) {
-	filename := fmt.Sprintf("ghoststate_report_%s.json", time.Now().Format("2006-01-02_150405"))
-	file, err := os.Create(filename)
+func ExportJSONWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (filename string, err error) {
+	if meta.CostNote == "" {
+		meta.CostNote = CostNote
+	}
+	file, err := newReportFile("json")
 	if err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
 	}
-	defer file.Close()
+	defer finishReport(file, &filename, &err)
 
 	export := map[string]interface{}{
 		"generated_at": time.Now().Format(time.RFC3339),
@@ -94,20 +97,22 @@ func ExportJSONWithMetadata(results map[string][]scanner.Resource, meta ExportMe
 		return "", fmt.Errorf("failed to encode JSON: %w", err)
 	}
 
-	return filename, nil
+	return file.Name(), nil
 }
 
 func ExportHTML(results map[string][]scanner.Resource) (string, error) {
 	return ExportHTMLWithMetadata(results, ExportMetadata{})
 }
 
-func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (string, error) {
-	filename := fmt.Sprintf("ghoststate_report_%s.html", time.Now().Format("2006-01-02_150405"))
-	file, err := os.Create(filename)
+func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMetadata) (filename string, err error) {
+	if meta.CostNote == "" {
+		meta.CostNote = CostNote
+	}
+	file, err := newReportFile("html")
 	if err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
 	}
-	defer file.Close()
+	defer finishReport(file, &filename, &err)
 
 	totalResources := 0
 	totalCost := 0.0
@@ -137,6 +142,18 @@ func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMe
 	}
 
 	categoryOrder := []string{"COMPUTING", "DATA & STORAGE", "NETWORKING", "SECURITY & IDENTITY", "MONITORING", "OTHER"}
+	known := make(map[string]bool, len(categoryOrder))
+	for _, category := range categoryOrder {
+		known[category] = true
+	}
+	var extra []string
+	for category := range results {
+		if !known[category] {
+			extra = append(extra, category)
+		}
+	}
+	sort.Strings(extra)
+	categoryOrder = append(categoryOrder, extra...)
 
 	var categories []CategoryData
 	for _, catName := range categoryOrder {
@@ -155,6 +172,7 @@ func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMe
 					IsGhost:         r.IsGhost,
 					RiskInfo:        r.RiskInfo,
 					GhostInfo:       r.GhostInfo,
+					Info:            r.Info,
 					Recommendation:  r.Recommendation,
 					ControlRefs:     r.ControlRefs,
 					MonthlyCost:     r.MonthlyCost,
@@ -432,6 +450,7 @@ func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMe
                         <td>
                             <div class="detail">
                                 {{if .RiskInfo}}{{.RiskInfo}}{{end}}
+                                {{if .Info}}<br>{{.Info}}{{end}}
                                 {{if .GhostInfo}}{{if .RiskInfo}}<br>{{end}}Ghost: {{.GhostInfo}}{{end}}
                                 {{if .Recommendation}}<br><strong>Action:</strong> {{.Recommendation}}{{end}}
                                 {{if .ControlRefs}}<br>{{range .ControlRefs}}<span class="control">{{.}}</span>{{end}}{{end}}
@@ -458,5 +477,5 @@ func ExportHTMLWithMetadata(results map[string][]scanner.Resource, meta ExportMe
 		return "", fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	return filename, nil
+	return file.Name(), nil
 }

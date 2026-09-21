@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,8 +36,6 @@ const (
 	ViewStats  = 1
 	ViewCost   = 2
 )
-
-var Program *tea.Program
 
 var (
 	colorGold   = lipgloss.Color("#F2C85B")
@@ -83,11 +82,17 @@ var (
 			MarginBottom(1)
 )
 
+type scanRunner func(context.Context, func(tea.Msg), scanner.AuditConfig)
+
 type Model struct {
-	state    int
-	choices  []string
-	selected map[int]bool
-	cursor   int
+	scanContext context.Context
+	cancelScan  context.CancelFunc
+	scanEvents  chan tea.Msg
+	runScan     scanRunner
+	state       int
+	choices     []string
+	selected    map[int]bool
+	cursor      int
 
 	inputs   []textinput.Model
 	focusIdx int
@@ -198,6 +203,7 @@ func InitialModel() Model {
 
 	return Model{
 		state:          StateMenu,
+		runScan:        ghostAws.ScanAll,
 		choices:        choices,
 		selected:       sel,
 		cursor:         0,
@@ -349,6 +355,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			m.Close()
 			return m, tea.Quit
 		}
 		if msg.String() == "esc" {
@@ -365,6 +372,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			switch m.state {
+			case StateScan:
+				if m.cancelScan != nil {
+					m.cancelScan()
+				}
+				m.statusMsg = "Canceling scan..."
+				return m, nil
 			case StateConfig:
 				m.state = StateMenu
 				return m, nil
@@ -403,7 +416,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.state == StateConfig {
 			switch msg.String() {
-			case "m", "M":
+			case "ctrl+o":
 				if m.scanMode == "ALL" {
 					m.scanMode = "RISK"
 				} else if m.scanMode == "RISK" {
@@ -411,7 +424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.scanMode = "ALL"
 				}
-			case "r", "R":
+			case "ctrl+r":
 				if m.regionMode == scanner.RegionModeCurrent {
 					m.regionMode = scanner.RegionModeAll
 				} else if m.regionMode == scanner.RegionModeAll {
@@ -423,14 +436,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.handleInputFocus("current")
 					}
 				}
-			case "a", "A":
+			case "ctrl+s":
 				m.autoSave = !m.autoSave
-			case "up", "k", "shift+tab":
+			case "up", "shift+tab":
 				m.handleInputFocus("prev")
-			case "down", "j", "tab":
+			case "down", "tab":
 				m.handleInputFocus("next")
 			case "enter":
 				if m.focusIdx == m.activeConfigInputs()-1 {
+					if m.regionMode == scanner.RegionModeCustom && len(parseRegionList(m.inputs[2].Value())) == 0 {
+						m.statusMsg = "Enter at least one custom region."
+						return m, nil
+					}
 					m.results = make(map[string][]scanner.Resource)
 					m.resultList = []scanner.Resource{}
 					m.scanErrors = []scanner.ScanError{}
@@ -450,11 +467,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.state = StateScan
 					m.startTime = time.Now()
-					return m, m.startScanCmd()
+					cmd := m.startScanCmd()
+					return m, cmd
 				} else {
 					m.handleInputFocus("next")
 				}
+			default:
+				cmd := m.updateInputs(msg)
+				return m, cmd
 			}
+			return m, nil
 		} else if m.state == StateDone {
 			if m.searchActive {
 				switch msg.String() {
@@ -475,12 +497,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default:
 					var cmd tea.Cmd
 					m.searchInput, cmd = m.searchInput.Update(msg)
+					m.searchFilter = m.searchInput.Value()
+					m = m.resetResultPosition()
 					return m, cmd
 				}
 			}
 
 			switch msg.String() {
-			case "q":
+			case "q", "Q":
+				m.Close()
 				return m, tea.Quit
 			case "/":
 				m.searchActive = true
@@ -562,7 +587,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ghostAws.FoundMsg:
 		res := scanner.Resource(msg)
 		if !includeByMode(m.scanMode, res) {
-			return m, nil
+			return m, m.waitForScanEvent()
 		}
 		catKey := res.Service
 		if catKey == "" {
@@ -577,27 +602,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.autoSave && m.streamWriter != nil {
 			if err := m.streamWriter.WriteResource(cat, res); err != nil {
 				m.statusMsg = fmt.Sprintf("Auto-save error: %v", err)
+				_ = m.streamWriter.Close()
+				m.streamWriter = nil
 			}
 		}
 
-		return m, nil
+		return m, m.waitForScanEvent()
 
 	case ghostAws.ScanErrorMsg:
 		scanErr := scanner.ScanError(msg)
 		m.scanErrors = append(m.scanErrors, scanErr)
 		m.statusMsg = fmt.Sprintf("Partial failure: %s in %s", scanErr.Service, scanErr.Region)
-		return m, nil
+		return m, m.waitForScanEvent()
 
 	case ghostAws.StatusMsg:
 		m.statusMsg = string(msg)
-		return m, nil
+		return m, m.waitForScanEvent()
+
+	case ghostAws.RegionsMsg:
+		m.scanRegions = append([]string(nil), msg...)
+		return m, m.waitForScanEvent()
 
 	case ghostAws.FinishedMsg:
+		if m.scanContext != nil && m.scanContext.Err() != nil {
+			m.scanErrors = append(m.scanErrors, scanner.ScanError{Service: "Scan", Error: "Scan canceled; results are incomplete."})
+			m.statusMsg = "Scan canceled; showing partial results."
+		}
+		if m.cancelScan != nil {
+			m.cancelScan()
+			m.cancelScan = nil
+		}
+		m.scanEvents = nil
 		m.duration = time.Since(m.startTime)
 		m.state = StateDone
 
 		if m.autoSave && m.streamWriter != nil {
-			if err := m.streamWriter.Close(); err != nil {
+			if err := m.streamWriter.WriteMetadata(m.exportMetadata()); err != nil {
+				m.statusMsg = fmt.Sprintf("Error saving auto-save metadata: %v", err)
+				_ = m.streamWriter.Close()
+			} else if err := m.streamWriter.Close(); err != nil {
 				m.statusMsg = fmt.Sprintf("Error closing auto-save: %v", err)
 			} else {
 				m.statusMsg = fmt.Sprintf("Auto-saved to %s", m.streamWriter.GetFilename())
@@ -605,7 +648,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamWriter = nil
 		}
 
-		return m, nil
+		return m, m.waitForScanEvent()
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -614,7 +657,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.state == StateConfig {
-		return m, m.updateInputs(msg)
+		cmd := m.updateInputs(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -785,62 +829,98 @@ func (m *Model) handleInputFocus(direction string) {
 	}
 }
 
-func (m Model) startScanCmd() tea.Cmd {
-	return func() tea.Msg {
-		rawKeys := strings.TrimSpace(m.inputs[0].Value())
-		rawVals := strings.TrimSpace(m.inputs[1].Value())
-		regions := []string{}
-		if m.regionMode == scanner.RegionModeCustom {
-			regions = parseRegionList(m.inputs[2].Value())
+func (m *Model) startScanCmd() tea.Cmd {
+	rawKeys := strings.TrimSpace(m.inputs[0].Value())
+	rawVals := strings.TrimSpace(m.inputs[1].Value())
+	regions := []string{}
+	if m.regionMode == scanner.RegionModeCustom {
+		regions = parseRegionList(m.inputs[2].Value())
+	}
+	conf := scanner.AuditConfig{
+		Regions:    regions,
+		RegionMode: m.regionMode,
+		ScanEC2:    m.selected[2],
+		ScanECS:    m.selected[3],
+		ScanLambda: m.selected[4],
+		ScanEKS:    m.selected[5],
+		ScanECR:    m.selected[6],
+
+		ScanS3:       m.selected[8],
+		ScanRDS:      m.selected[9],
+		ScanDynamoDB: m.selected[10],
+		ScanElasti:   m.selected[11],
+		ScanEBS:      m.selected[12],
+
+		ScanVPC:        m.selected[14],
+		ScanCloudfront: m.selected[15],
+		ScanEIP:        m.selected[16],
+		ScanELB:        m.selected[17],
+		ScanRoute53:    m.selected[18],
+
+		ScanSecGroups:  m.selected[20],
+		ScanACM:        m.selected[21],
+		ScanIAM:        m.selected[22],
+		ScanSecrets:    m.selected[23],
+		ScanKMS:        m.selected[24],
+		ScanCloudTrail: m.selected[25],
+
+		ScanCloudWatch: m.selected[27],
+		TargetRule: scanner.AuditRule{
+			TargetKey: rawKeys,
+			TargetVal: rawVals,
+			ScanMode:  m.scanMode,
+		},
+	}
+
+	if m.autoSave {
+		writer, err := report.NewStreamingReportWriter()
+		if err != nil {
+			m.autoSave = false
+			m.statusMsg = fmt.Sprintf("Auto-save disabled: %v", err)
+		} else {
+			m.streamWriter = writer
 		}
-		conf := scanner.AuditConfig{
-			Regions:    regions,
-			RegionMode: m.regionMode,
-			ScanEC2:    m.selected[2],
-			ScanECS:    m.selected[3],
-			ScanLambda: m.selected[4],
-			ScanEKS:    m.selected[5],
-			ScanECR:    m.selected[6],
+	}
 
-			ScanS3:       m.selected[8],
-			ScanRDS:      m.selected[9],
-			ScanDynamoDB: m.selected[10],
-			ScanElasti:   m.selected[11],
-			ScanEBS:      m.selected[12],
-
-			ScanVPC:        m.selected[14],
-			ScanCloudfront: m.selected[15],
-			ScanEIP:        m.selected[16],
-			ScanELB:        m.selected[17],
-			ScanRoute53:    m.selected[18],
-
-			ScanSecGroups:  m.selected[20],
-			ScanACM:        m.selected[21],
-			ScanIAM:        m.selected[22],
-			ScanSecrets:    m.selected[23],
-			ScanKMS:        m.selected[24],
-			ScanCloudTrail: m.selected[25],
-
-			ScanCloudWatch: m.selected[27],
-			TargetRule: scanner.AuditRule{
-				TargetKey: rawKeys,
-				TargetVal: rawVals,
-				ScanMode:  m.scanMode,
-			},
-		}
-
-		if m.autoSave {
-			writer, err := report.NewStreamingReportWriter()
-			if err != nil {
-				m.autoSave = false
-				m.statusMsg = fmt.Sprintf("Auto-save disabled: %v", err)
-			} else {
-				m.streamWriter = writer
+	ctx, cancel := context.WithCancel(context.Background())
+	m.scanContext = ctx
+	m.cancelScan = cancel
+	m.scanEvents = make(chan tea.Msg, 64)
+	events := m.scanEvents
+	run := m.runScan
+	return tea.Batch(func() tea.Msg {
+		run(ctx, func(msg tea.Msg) {
+			select {
+			case events <- msg:
+			case <-ctx.Done():
 			}
-		}
-
-		go ghostAws.ScanAll(Program, conf)
+		}, conf)
+		close(events)
 		return nil
+	}, m.waitForScanEvent())
+}
+
+func (m Model) waitForScanEvent() tea.Cmd {
+	if m.scanEvents == nil {
+		return nil
+	}
+	events := m.scanEvents
+	return func() tea.Msg {
+		msg, ok := <-events
+		if !ok {
+			return ghostAws.FinishedMsg{}
+		}
+		return msg
+	}
+}
+
+// Close releases scan and report resources, including on early program exit.
+func (m Model) Close() {
+	if m.cancelScan != nil {
+		m.cancelScan()
+	}
+	if m.streamWriter != nil {
+		_ = m.streamWriter.Close()
 	}
 }
 
@@ -860,7 +940,7 @@ func (m Model) exportMetadata() report.ExportMetadata {
 		Regions:      append([]string{}, m.scanRegions...),
 		Errors:       append([]scanner.ScanError{}, m.scanErrors...),
 		TotalSavings: m.totalSavings,
-		CostNote:     "Monthly costs and savings are estimates based on known resource shape and static pricing hints.",
+		CostNote:     report.CostNote,
 	}
 }
 
@@ -1139,6 +1219,9 @@ func (m Model) renderModal() string {
 	if len(r.ControlRefs) > 0 {
 		s += fmt.Sprintf("Controls: %s\n", strings.Join(r.ControlRefs, ", "))
 	}
+	if r.Info != "" {
+		s += "\n" + r.Info + "\n"
+	}
 	s += "\nTags:\n"
 	keys := make([]string, 0, len(r.Tags))
 	for k := range r.Tags {
@@ -1183,21 +1266,25 @@ func (m Model) View() string {
 		}
 	case StateConfig:
 		s += headerStyle.Render(" 2. AUDIT RULE ") + "\n"
-		s += fmt.Sprintf("SCAN MODE: %s (Press 'm' to toggle)\n", sectionStyle.Render(m.scanMode))
-		s += fmt.Sprintf("REGIONS: %s (Press 'r' to toggle)\n", sectionStyle.Render(regionModeLabel(m.regionMode)))
+		s += fmt.Sprintf("SCAN MODE: %s (Ctrl+O to toggle)\n", sectionStyle.Render(m.scanMode))
+		s += fmt.Sprintf("REGIONS: %s (Ctrl+R to toggle)\n", sectionStyle.Render(regionModeLabel(m.regionMode)))
 
 		autoSaveStatus := "DISABLED"
 		if m.autoSave {
 			autoSaveStatus = "ENABLED"
 		}
-		s += fmt.Sprintf("AUTO-SAVE CSV: %s (Press 'a' to toggle)\n\n", sectionStyle.Render(autoSaveStatus))
+		s += fmt.Sprintf("AUTO-SAVE CSV: %s (Ctrl+S to toggle)\n\n", sectionStyle.Render(autoSaveStatus))
 
+		if m.statusMsg != "" {
+			s += styleHigh.Render(m.statusMsg) + "\n"
+		}
 		for i := 0; i < m.activeConfigInputs(); i++ {
 			s += m.inputs[i].View() + "\n"
 		}
-		s += lipgloss.NewStyle().Foreground(colorGray).MarginTop(1).Render("[Up/Down/Tab] Navigate Fields   [M] Mode   [R] Regions   [A] Auto-save   [Enter] Start Scan")
+		s += lipgloss.NewStyle().Foreground(colorGray).MarginTop(1).Render("[Up/Down/Tab] Navigate Fields   [Ctrl+O] Mode   [Ctrl+R] Regions   [Ctrl+S] Auto-save   [Enter] Start Scan")
 	case StateScan:
 		s += headerStyle.Render(" 3. SCANNING... ") + "\n" + m.spinner.View() + " " + m.statusMsg + "\n"
+		s += fmt.Sprintf("%d resources found. [Esc] Cancel scan\n", len(m.resultList))
 	case StateDone:
 		header := m.renderHeaderContent()
 		footer := m.renderFooterContent()

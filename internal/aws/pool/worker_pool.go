@@ -5,83 +5,108 @@ import (
 	"sync"
 )
 
-// Task represents a unit of work
+// Task represents a unit of work. Tasks must honor context cancellation.
 type Task func(ctx context.Context) error
 
-// WorkerPool manages a pool of workers for concurrent task execution
+// WorkerPool limits concurrent work and collects errors without blocking workers.
+// Start, Submit, Wait, and Stop may be called concurrently.
 type WorkerPool struct {
 	maxWorkers int
 	tasks      chan Task
 	wg         sync.WaitGroup
 	ctx        context.Context
 	cancel     context.CancelFunc
-	errors     chan error
+	startOnce  sync.Once
+	waitOnce   sync.Once
+	mu         sync.RWMutex
+	closed     bool
+	errMu      sync.Mutex
+	errors     []error
 }
 
-// NewWorkerPool creates a new worker pool with specified max workers
-func NewWorkerPool(maxWorkers int) *WorkerPool {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewWorkerPool(ctx context.Context, maxWorkers int) *WorkerPool {
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	return &WorkerPool{
 		maxWorkers: maxWorkers,
 		tasks:      make(chan Task, maxWorkers*2),
 		ctx:        ctx,
 		cancel:     cancel,
-		errors:     make(chan error, maxWorkers),
 	}
 }
 
-// Start initializes the worker pool
+// Start initializes the workers once. Submit and Wait also start them if needed.
 func (wp *WorkerPool) Start() {
-	for i := 0; i < wp.maxWorkers; i++ {
-		wp.wg.Add(1)
-		go wp.worker()
-	}
+	wp.startOnce.Do(func() {
+		wp.wg.Add(wp.maxWorkers)
+		for i := 0; i < wp.maxWorkers; i++ {
+			go wp.worker()
+		}
+	})
 }
 
-// worker processes tasks from the task channel
 func (wp *WorkerPool) worker() {
 	defer wp.wg.Done()
-
 	for {
 		select {
 		case <-wp.ctx.Done():
 			return
 		case task, ok := <-wp.tasks:
-			if !ok {
+			if !ok || wp.ctx.Err() != nil {
 				return
 			}
 			if err := task(wp.ctx); err != nil {
-				select {
-				case wp.errors <- err:
-				}
+				wp.errMu.Lock()
+				wp.errors = append(wp.errors, err)
+				wp.errMu.Unlock()
 			}
 		}
 	}
 }
 
-// Submit adds a task to the worker pool
-func (wp *WorkerPool) Submit(task Task) {
+// Submit reports whether a task was accepted. Submissions after shutdown are rejected.
+func (wp *WorkerPool) Submit(task Task) bool {
+	if task == nil {
+		return false
+	}
+	wp.Start()
+	wp.mu.RLock()
+	defer wp.mu.RUnlock()
+	if wp.closed || wp.ctx.Err() != nil {
+		return false
+	}
 	select {
 	case <-wp.ctx.Done():
-		return
+		return false
 	case wp.tasks <- task:
+		return true
 	}
 }
 
-// Wait closes the task channel and waits for all workers to finish
+// Wait stops accepting tasks and waits for accepted work to finish.
 func (wp *WorkerPool) Wait() {
-	close(wp.tasks)
-	wp.wg.Wait()
-	close(wp.errors)
+	wp.Start()
+	wp.waitOnce.Do(func() {
+		wp.mu.Lock()
+		wp.closed = true
+		close(wp.tasks)
+		wp.mu.Unlock()
+		wp.wg.Wait()
+		wp.cancel()
+	})
 }
 
-// Stop cancels the context and stops all workers
+// Stop cancels running tasks and discards queued work before waiting for shutdown.
 func (wp *WorkerPool) Stop() {
 	wp.cancel()
 	wp.Wait()
 }
 
-// Errors returns a channel to receive errors from workers
-func (wp *WorkerPool) Errors() <-chan error {
-	return wp.errors
+// Errors returns a snapshot; call after Wait to obtain all task errors.
+func (wp *WorkerPool) Errors() []error {
+	wp.errMu.Lock()
+	defer wp.errMu.Unlock()
+	return append([]error(nil), wp.errors...)
 }

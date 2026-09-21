@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"maps"
 	"sync"
 	"time"
 )
@@ -31,7 +32,7 @@ func (tc *TagCache) Get(arn string) (map[string]string, bool) {
 	if expiry, exists := tc.expires[arn]; exists {
 		if time.Now().Before(expiry) {
 			if tags, ok := tc.cache[arn]; ok {
-				return tags, true
+				return maps.Clone(tags), true
 			}
 		}
 	}
@@ -44,7 +45,7 @@ func (tc *TagCache) Set(arn string, tags map[string]string) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	tc.cache[arn] = tags
+	tc.cache[arn] = maps.Clone(tags)
 	tc.expires[arn] = time.Now().Add(tc.ttl)
 }
 
@@ -72,7 +73,7 @@ func (tc *TagCache) CleanExpired() {
 
 	now := time.Now()
 	for arn, expiry := range tc.expires {
-		if now.After(expiry) {
+		if !now.Before(expiry) {
 			delete(tc.cache, arn)
 			delete(tc.expires, arn)
 		}

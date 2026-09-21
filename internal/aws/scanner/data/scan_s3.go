@@ -2,11 +2,15 @@ package data
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/K0NGR3SS/GhostState/internal/scanner"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 type S3Scanner struct {
@@ -17,117 +21,114 @@ func NewS3Scanner(cfg aws.Config) *S3Scanner {
 	return &S3Scanner{Client: s3.NewFromConfig(cfg)}
 }
 
+func apiErrorCode(err error, code string) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
+}
+
 func (s *S3Scanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]scanner.Resource, error) {
-	out, err := s.Client.ListBuckets(ctx, &s3.ListBucketsInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var results []scanner.Resource
-	for _, b := range out.Buckets {
-		res := scanner.Resource{
-			ID:      aws.ToString(b.Name),
-			Service: "S3",
-			Type:    "S3 Bucket",
-			Status:  "Active",
-			Tags:    map[string]string{},
-			Risk:    "SAFE",
+	var checkErrors []error
+	pages := s3.NewListBucketsPaginator(s.Client, &s3.ListBucketsInput{MaxBuckets: aws.Int32(1000)})
+	for pages.HasMorePages() {
+		out, err := pages.NextPage(ctx)
+		if err != nil {
+			return results, errors.Join(append(checkErrors, err)...)
 		}
+		for _, bucket := range out.Buckets {
+			if err := ctx.Err(); err != nil {
+				return results, errors.Join(append(checkErrors, err)...)
+			}
+			client := s.Client
+			region := aws.ToString(bucket.BucketRegion)
+			if region != "" && region != client.Options().Region {
+				options := client.Options()
+				options.Region = region
+				client = s3.New(options)
+			}
+			res := scanner.Resource{
+				ID: aws.ToString(bucket.Name), Service: "S3", Type: "S3 Bucket",
+				Region: region, Status: "Active", Tags: map[string]string{}, Risk: "SAFE",
+			}
+			var riskIssues, unavailable []string
+			recordError := func(check string, err error) {
+				checkErrors = append(checkErrors, fmt.Errorf("bucket %s: %s: %w", res.ID, check, err))
+				unavailable = append(unavailable, check)
+			}
+			tags, err := client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: bucket.Name})
+			if err == nil {
+				for _, tag := range tags.TagSet {
+					res.Tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+				}
+			} else if !apiErrorCode(err, "NoSuchTagSet") {
+				recordError("tags", err)
+			}
 
-		bucketName := b.Name
-		var riskIssues []string
-
-		// Best-effort tag hydration for rule matching.
-		tagOut, err := s.Client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
-			Bucket: bucketName,
-		})
-		if err == nil {
-			for _, tag := range tagOut.TagSet {
-				if tag.Key != nil && tag.Value != nil {
-					res.Tags[*tag.Key] = *tag.Value
+			pab, err := client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: bucket.Name})
+			switch {
+			case apiErrorCode(err, "NoSuchPublicAccessBlockConfiguration"):
+				res.Risk = "HIGH"
+				riskIssues = append(riskIssues, "Bucket Public Access Block Missing")
+			case err != nil:
+				recordError("public access block", err)
+			case pab.PublicAccessBlockConfiguration == nil:
+				recordError("public access block", errors.New("empty configuration response"))
+			default:
+				conf := pab.PublicAccessBlockConfiguration
+				if !aws.ToBool(conf.BlockPublicAcls) || !aws.ToBool(conf.BlockPublicPolicy) ||
+					!aws.ToBool(conf.IgnorePublicAcls) || !aws.ToBool(conf.RestrictPublicBuckets) {
+					res.Risk = "HIGH"
+					riskIssues = append(riskIssues, "Bucket Public Access Block Incomplete")
 				}
 			}
-		}
 
-		// Check public access block
-		pab, err := s.Client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: bucketName})
-		isPublic := false
-
-		if err != nil {
-			isPublic = true
-			riskIssues = append(riskIssues, "No Public Access Block")
-		} else if pab.PublicAccessBlockConfiguration != nil {
-			conf := pab.PublicAccessBlockConfiguration
-			if (conf.BlockPublicAcls == nil || !*conf.BlockPublicAcls) ||
-				(conf.BlockPublicPolicy == nil || !*conf.BlockPublicPolicy) ||
-				(conf.IgnorePublicAcls == nil || !*conf.IgnorePublicAcls) ||
-				(conf.RestrictPublicBuckets == nil || !*conf.RestrictPublicBuckets) {
-				isPublic = true
-				riskIssues = append(riskIssues, "Public Access Allowed")
-			}
-		}
-
-		// Check versioning
-		versioningOut, err := s.Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
-			Bucket: bucketName,
-		})
-		if err == nil {
-			if versioningOut.Status != types.BucketVersioningStatusEnabled {
+			versioning, err := client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: bucket.Name})
+			if err != nil {
+				recordError("versioning", err)
+			} else if versioning.Status != types.BucketVersioningStatusEnabled {
 				riskIssues = append(riskIssues, "Versioning Disabled")
 				if res.Risk == "SAFE" {
 					res.Risk = "MEDIUM"
 				}
 			}
-		}
 
-		// Check encryption
-		encryptionOut, err := s.Client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
-			Bucket: bucketName,
-		})
-		if err != nil || encryptionOut.ServerSideEncryptionConfiguration == nil {
-			riskIssues = append(riskIssues, "Encryption Disabled")
-			if res.Risk == "SAFE" || res.Risk == "MEDIUM" {
-				res.Risk = "MEDIUM"
+			encryption, err := client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: bucket.Name})
+			if err != nil {
+				// AccessDenied and missing configuration do not prove objects are unencrypted.
+				recordError("encryption", err)
+			} else if encryption.ServerSideEncryptionConfiguration == nil {
+				recordError("encryption", errors.New("empty configuration response"))
 			}
-		}
 
-		// Check for logging
-		loggingOut, err := s.Client.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
-			Bucket: bucketName,
-		})
-		if err == nil && loggingOut.LoggingEnabled == nil {
-			riskIssues = append(riskIssues, "Logging Disabled")
-		}
-
-		// Public access is highest priority
-		if isPublic {
-			res.Risk = "HIGH"
-		}
-
-		// Build risk info string
-		if len(riskIssues) > 0 {
-			res.RiskInfo = riskIssues[0]
-			if len(riskIssues) > 1 {
-				for i := 1; i < len(riskIssues); i++ {
-					res.RiskInfo += "; " + riskIssues[i]
+			logging, err := client.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{Bucket: bucket.Name})
+			if err != nil {
+				recordError("logging", err)
+			} else if logging.LoggingEnabled == nil {
+				riskIssues = append(riskIssues, "Logging Disabled")
+				if res.Risk == "SAFE" {
+					res.Risk = "LOW"
 				}
 			}
-		}
 
-		// Check if bucket is empty
-		listOut, err := s.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:  bucketName,
-			MaxKeys: aws.Int32(1),
-		})
-		if err == nil && listOut.KeyCount != nil && *listOut.KeyCount == 0 {
-			res.IsGhost = true
-			res.GhostInfo = "Empty Bucket"
-		}
+			objects, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: bucket.Name, MaxKeys: aws.Int32(1)})
+			if err != nil {
+				recordError("objects", err)
+			} else if objects.KeyCount != nil && *objects.KeyCount == 0 {
+				res.IsGhost = true
+				res.GhostInfo = "Empty Bucket"
+			}
 
-		if scanner.MatchesRule(res.Tags, rule) {
-			results = append(results, res)
+			res.RiskInfo = strings.Join(riskIssues, "; ")
+			if len(unavailable) > 0 {
+				res.Info = "Checks unavailable: " + strings.Join(unavailable, ", ")
+				if res.Risk == "SAFE" {
+					res.Risk = "UNKNOWN"
+				}
+			}
+			if scanner.MatchesRule(res.Tags, rule) {
+				results = append(results, res)
+			}
 		}
 	}
-
-	return results, nil
+	return results, errors.Join(checkErrors...)
 }

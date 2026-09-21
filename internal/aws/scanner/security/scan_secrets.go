@@ -24,7 +24,7 @@ func (s *SecretsScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sc
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, secret := range out.SecretList {
@@ -41,7 +41,7 @@ func (s *SecretsScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([]sc
 					res.Tags[*t.Key] = *t.Value
 				}
 			}
-			
+
 			if secret.LastAccessedDate == nil {
 				res.IsGhost = true
 				res.GhostInfo = "Never Accessed"

@@ -25,7 +25,7 @@ func (s *CloudWatchScanner) Scan(ctx context.Context, rule scanner.AuditRule) ([
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 
 		for _, a := range out.MetricAlarms {
